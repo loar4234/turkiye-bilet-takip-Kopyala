@@ -633,9 +633,6 @@ def main():
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase GitHub Secrets eksik!")
 
-    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
-        telegram_send("✅ Türkiye Bilet Takip bot bağlantı testi başarılı. Telegram bildirimleri aktif.")
-
     biletnerde_events = run_biletnerde()
     tff_events = run_tff()
 
