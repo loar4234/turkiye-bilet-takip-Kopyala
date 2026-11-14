@@ -1034,10 +1034,11 @@ def run_biletnerde():
         events = scrape_biletnerde()
 
         if not events:
-            # Kaynak bu taramada etkinlik göstermiyorsa boş sonucu kaydet;
-            # diğer kaynakların taranmasını kesme.
-            save_source_check("BiletNerde", "success", 0)
-            return events
+            html = fetch_html(BILETNERDE_URL)
+            if re.search(r"0\s*etkinlik|etkinlik bulunamadı|bu kriterlere uygun etkinlik bulunamadı", html, re.IGNORECASE):
+                save_source_check("BiletNerde", "success", 0)
+                return events
+            raise RuntimeError("BiletNerde sayfası etkinlik içeriyor olabilir ancak ayrıştırıcı kayıt çıkaramadı.")
 
         save_and_notify(events)
         save_source_check("BiletNerde", "success", len(events))
