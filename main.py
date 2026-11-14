@@ -389,7 +389,7 @@ def scrape_ticket_platform(source, urls):
         # Bu kaynakların taranan URL'leri etkinlik listeleme/keşif sayfalarıdır.
         # Bu nedenle başlığında "konser" geçmeyen kartlar da, detay URL'si
         # etkinlik/bilet yolundaysa müzik etkinliği bağlamında değerlendirilebilir.
-        curated_context = source in {"Biletix", "Bubilet", "Biletinial", "Mobilet", "Biletino"}
+        curated_context = source in {"Biletix", "Biletinial", "Mobilet", "Biletino"}
         for anchor in parser.anchors:
             href = unescape(anchor.get("href", "")).strip()
             label = clean_text(anchor.get("text", ""))
@@ -398,7 +398,7 @@ def scrape_ticket_platform(source, urls):
             full_url = urllib.parse.urljoin(page_url, href)
             parsed = urllib.parse.urlparse(full_url)
             host = (parsed.hostname or "").lower()
-            if not (host.endswith("biletix.com") or host.endswith("bubilet.com.tr")
+            if not (host.endswith("biletix.com") 
                     or host.endswith("biletinial.com") or host.endswith("mobilet.com")
                     or host.endswith("biletino.com")):
                 continue
@@ -413,7 +413,7 @@ def scrape_ticket_platform(source, urls):
                 continue
             category = classify_music_event(label, label)
             if category not in ("concert", "festival"):
-                # Biletinial/Mobilet/Bubilet music and concert list pages provide category context.
+                # Listed platforms are treated as curated music/event listing pages.
                 page_context = page_url.lower()
                 if curated_context:
                     category = "festival" if "festival" in (label + path).lower() else "concert"
@@ -473,15 +473,6 @@ def run_biletix():
     return run_ticket_source("Biletix", [
         "https://www.biletix.com/anasayfa/TURKIYE/tr"
     ])
-
-
-def run_bubilet():
-    # Bubilet'in şehir ana sayfaları, /etiket/konser yoluna göre daha geniş etkinlik listesi sunar.
-    cities = ("istanbul", "ankara", "izmir", "antalya", "bursa",
-              "adana", "konya", "eskisehir", "trabzon", "samsun",
-              "kayseri", "gaziantep")
-    urls = [f"https://www.bubilet.com.tr/{city}" for city in cities]
-    return run_ticket_source("Bubilet", urls)
 
 
 def run_biletinial():
@@ -862,8 +853,6 @@ def run_self_tests():
     parsed = platform_event_from_json(sample, "Biletix", "https://www.biletix.com/")
     if not parsed or parsed["title"] != "Örnek Konser" or parsed["ticket_status"] != "on_sale":
         raise RuntimeError("Yeni platform JSON-LD ayrıştırma testi başarısız.")
-    if platform_event_from_json({"@type": "Event", "name": "Stand Up Gecesi"}, "Bubilet", "https://www.bubilet.com.tr/") is not None:
-        raise RuntimeError("Yeni platform konser filtresi testi başarısız.")
 
     print("[TEST] Etkinlik filtresi ve bilet durumu testleri başarılı.")
 
@@ -1452,20 +1441,18 @@ def main():
     run_self_tests()
     # BiletNerde devre dışı: yerine dört doğrudan bilet platformu taranır.
     biletix_events = run_biletix()
-    bubilet_events = run_bubilet()
     biletinial_events = run_biletinial()
     mobilet_events = run_mobilet()
     biletino_events = run_biletino()
     passo_events = run_passo()
     tff_events = run_tff()
 
-    total = (len(biletix_events) + len(bubilet_events) + len(biletinial_events)
-             + len(mobilet_events) + len(biletino_events) + len(passo_events) + len(tff_events))
+    total = (len(biletix_events) + len(biletinial_events) + len(mobilet_events)
+             + len(biletino_events) + len(passo_events) + len(tff_events))
 
     print("\n" + "=" * 55)
     print("TARAMA TAMAMLANDI")
     print("Biletix:", len(biletix_events))
-    print("Bubilet:", len(bubilet_events))
     print("Biletinial:", len(biletinial_events))
     print("Mobilet:", len(mobilet_events))
     print("Biletino:", len(biletino_events))
