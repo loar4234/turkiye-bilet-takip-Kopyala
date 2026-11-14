@@ -386,6 +386,10 @@ def scrape_ticket_platform(source, urls):
         # gerçek etkinlik detay URL'leri kabul edilir. Stok bilgisi tahmin edilmez.
         parser = AnchorParser()
         parser.feed(html)
+        # Bu kaynakların taranan URL'leri etkinlik listeleme/keşif sayfalarıdır.
+        # Bu nedenle başlığında "konser" geçmeyen kartlar da, detay URL'si
+        # etkinlik/bilet yolundaysa müzik etkinliği bağlamında değerlendirilebilir.
+        curated_context = source in {"Biletix", "Bubilet", "Biletinial", "Mobilet", "Biletino"}
         for anchor in parser.anchors:
             href = unescape(anchor.get("href", "")).strip()
             label = clean_text(anchor.get("text", ""))
