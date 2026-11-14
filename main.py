@@ -357,7 +357,7 @@ def scrape_biletnerde():
                 "title": title[:500], "category": category,
                 "city": city or find_city(description), "venue": venue,
                 "event_date": date_value, "ticket_url": full_url,
-                "ticket_status": "unknown", "price_min": pmin, "price_max": pmax,
+                "ticket_status": passo_ticket_status(json.dumps(obj, ensure_ascii=False) + " " + description), "price_min": pmin, "price_max": pmax,
                 "last_seen_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat()
             })
@@ -603,6 +603,9 @@ def run_self_tests():
         (passo_ticket_status("Sold Out"), "sold_out"),
         (passo_ticket_status("Biletler tükendi"), "sold_out"),
         (passo_ticket_status("Limited availability"), "nearly_sold_out"),
+        (passo_ticket_status('{"availability":"https://schema.org/LimitedAvailability"}'), "nearly_sold_out"),
+        (passo_ticket_status('{"availability":"https://schema.org/SoldOut"}'), "sold_out"),
+        (passo_ticket_status('{"availability":"https://schema.org/InStock"}'), "on_sale"),
         (passo_ticket_status("Only 4 tickets left"), "nearly_sold_out"),
         (passo_ticket_status("Coming soon"), "not_on_sale"),
         (passo_ticket_status("Buy tickets ₺750"), "on_sale"),
