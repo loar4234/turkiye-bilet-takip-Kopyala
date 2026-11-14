@@ -701,20 +701,30 @@ def scrape_passo():
             if not title or "share:" in title.lower():
                 title = clean_text(item.get("title", "")) or f"PASSO etkinliği {source_id}"
 
+            title_context = clean_text(title + " " + item.get("title", ""))
+            title_key = normalize_key(title_context)
+            # Bu etkinlik tipleri müzik kategorisi sayfasında listelense bile
+            # kullanıcının istediği konser/festival kapsamına dahil değil.
+            excluded_title_terms = (
+                "karaoke", "dans gecesi", "dance night", "dj party",
+                "club night", "girls night", "happy girls night",
+                "tanis konus paylas dans et", "90 lar dans",
+                "90s dance", "celtic pub"
+            )
+            if any(term in title_key for term in excluded_title_terms):
+                print("[PASSO] Konser/festival dışı elendi:", title_context[:120])
+                continue
+
             category = item["category"]
             if category is None:
-                # Kategori kararını tüm detay metninden verme: PASSO sayfasında
-                # genel öneriler/alt bağlantılar başka etkinlik türlerinden söz edebiliyor.
-                # Önce etkinliğin kendi başlığını ve liste kartı başlığını denetle.
-                title_context = clean_text(title + " " + item.get("title", ""))
+                # Kategori kararını yalnızca etkinliğin kendi başlığından ver.
                 title_category = classify_music_event(title_context, "")
                 if title_category == "other":
+                    print("[PASSO] Konser/festival dışı elendi:", title_context[:120])
                     continue
                 if title_category in ("concert", "festival"):
                     category = title_category
                 elif item.get("music_category"):
-                    # Resmî konser/festival kategorisindeki, başlığında türü açıkça
-                    # yazmayan etkinlikleri dahil et; dışlanan başlıklar yukarıda elenir.
                     category = "concert"
                 else:
                     continue
