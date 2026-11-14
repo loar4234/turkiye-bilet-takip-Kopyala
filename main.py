@@ -182,6 +182,9 @@ def normalize_key(value):
     value = value.replace("ı", "i").replace("ş", "s").replace("ğ", "g")
     value = value.replace("ü", "u").replace("ö", "o").replace("ç", "c")
     value = re.sub(r"^one\s+cikan\s+", "", value)
+    # Liste kartlarındaki reklam/sponsor önekleri etkinlik kimliği değildir.
+    value = re.sub(r"^(?:%?\s*100\s+)?(?:metal|muzik)\s+sunar\s+", "", value)
+    value = re.sub(r"^one\s+cikan\s+", "", value)
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return clean_text(value)
 
@@ -194,10 +197,27 @@ def dedupe_events(events, source):
         date_part = (event.get("event_date") or "")[:10]
         title_key = normalize_key(event.get("title"))
         city_key = normalize_key(event.get("city"))
+        # Başlık sonunda tekrar edilen şehir adını kaldır.
+        if city_key and title_key.endswith(" " + city_key):
+            title_key = title_key[:-(len(city_key) + 1)]
         key = (title_key, city_key, date_part, event.get("category"))
         if key not in unique:
-            unique[key] = event
-            continue
+            # Başlığın biri diğerinin kısaltılmış hali ise aynı gün/şehirde birleştir.
+            duplicate_key = None
+            new_words = set(title_key.split())
+            for old_key in unique:
+                old_title, old_city, old_date, old_category = old_key
+                old_words = set(old_title.split())
+                if (old_city == city_key and old_date == date_part
+                    and old_category == event.get("category")
+                    and min(len(new_words), len(old_words)) >= 2
+                    and (new_words.issubset(old_words) or old_words.issubset(new_words))):
+                    duplicate_key = old_key
+                    break
+            if duplicate_key is None:
+                unique[key] = event
+                continue
+            key = duplicate_key
         current = unique[key]
         # Bilgisi daha dolu kaydı koru; URL ve kaynak kimliği kaybolmasın.
         score_new = sum(event.get(k) not in (None, "", "unknown") for k in
