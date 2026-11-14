@@ -165,7 +165,7 @@ def classify_event(text):
         return "festival"
 
     if any(x in lower for x in [
-        "maç", "mac", "futbol", "spor", "basketbol"
+        "maç", "mac", "futbol", "football", "basketbol"
     ]):
         return "football"
 
