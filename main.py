@@ -4,7 +4,7 @@ import re
 import json
 import urllib.request
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from html.parser import HTMLParser
 
 
@@ -13,6 +13,8 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 BILETNERDE_URL = "https://biletnerde.com/etkinlikler"
 TFF_URL = "https://www.tff.org/default.aspx?pageID=198"
+
+TR_TZ = timezone(timedelta(hours=3))
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
@@ -120,7 +122,7 @@ def parse_event_date(text):
     try:
         return datetime(
             year, month, day, hour, minute,
-            tzinfo=timezone.utc
+            tzinfo=TR_TZ
         ).isoformat()
     except ValueError:
         return None
@@ -210,8 +212,6 @@ def scrape_biletnerde():
         event_date = parse_event_date(text)
         price_min, price_max = parse_prices(text)
 
-        title = text
-
         title = re.sub(
             r"\d{1,2}\s*(?:-\s*\d{1,2}\s*)?"
             r"(?:Ocak|Şubat|Subat|Mart|Nisan|Mayıs|Mayis|"
@@ -219,7 +219,7 @@ def scrape_biletnerde():
             r"Ekim|Kasım|Kasim|Aralık|Aralik)"
             r"\s+\d{4}.*$",
             "",
-            title,
+            text,
             flags=re.IGNORECASE
         )
 
@@ -270,16 +270,12 @@ def scrape_tff():
 
     full_text = clean_text(" ".join(parser.parts))
 
-    # TFF satırları:
-    # Tarih Saat Ev Sahibi 0 - 2 Deplasman Detaylar
-    # Tarih Saat Ev Sahibi - Deplasman Detaylar
-
     pattern = re.compile(
         r"(\d{2}\.\d{2}\.\d{4})\s+"
         r"(\d{1,2}:\d{2})\s+"
-        r"(.+?)\s+"
-        r"(?:\d+\s*-\s*\d+|-)\s+"
-        r"(.+?)"
+        r"([A-ZÇĞİÖŞÜ0-9 .()&/]+?)"
+        r"\s+-\s+"
+        r"([A-ZÇĞİÖŞÜ0-9 .()&/]+?)"
         r"(?=\s+Detaylar|\s+\d{2}\.\d{2}\.\d{4}|$)"
     )
 
@@ -289,21 +285,18 @@ def scrape_tff():
     seen = set()
 
     for date_text, time_text, home, away in matches:
+        # Takım isimlerine müdahale etmiyoruz.
         home = clean_text(home)
         away = clean_text(away)
 
         if len(home) < 3 or len(away) < 3:
             continue
 
-        # Takım isimlerini gereksiz metinlerden arındır.
-        home = re.sub(r"^.*?(?=[A-ZÇĞİÖŞÜ])", "", home)
-        away = re.sub(r"\s+Puan Cetveli.*$", "", away)
-
         try:
             date_value = datetime.strptime(
                 date_text + " " + time_text,
                 "%d.%m.%Y %H:%M"
-            ).replace(tzinfo=timezone.utc)
+            ).replace(tzinfo=TR_TZ)
         except ValueError:
             continue
 
@@ -340,10 +333,40 @@ def scrape_tff():
 
     print("TFF bulunan maç:", len(events))
 
-    for event in events[:10]:
+    for event in events:
         print("MAÇ:", event["title"], "|", event["event_date"])
 
     return events
+
+
+def supabase_request(endpoint, method="GET", data=None, prefer=None):
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    if prefer:
+        headers["Prefer"] = prefer
+
+    body = None
+
+    if data is not None:
+        body = json.dumps(
+            data,
+            ensure_ascii=False
+        ).encode("utf-8")
+
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers=headers,
+        method=method
+    )
+
+    with urllib.request.urlopen(request, timeout=40) as response:
+        result = response.read().decode("utf-8", errors="replace")
+        return response.status, result
 
 
 def save_events(events):
@@ -360,30 +383,61 @@ def save_events(events):
     for start in range(0, len(events), 100):
         batch = events[start:start + 100]
 
-        data = json.dumps(
-            batch,
-            ensure_ascii=False
-        ).encode("utf-8")
-
-        request = urllib.request.Request(
+        status, _ = supabase_request(
             endpoint,
-            data=data,
-            headers={
-                "apikey": SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "resolution=merge-duplicates,return=minimal"
-            },
-            method="POST"
+            method="POST",
+            data=batch,
+            prefer="resolution=merge-duplicates,return=minimal"
         )
 
-        with urllib.request.urlopen(request, timeout=40) as response:
-            print(
-                "Supabase etkinlik kaydı:",
-                len(batch),
-                "| HTTP:",
-                response.status
+        print(
+            "Supabase etkinlik kaydı:",
+            len(batch),
+            "| HTTP:",
+            status
+        )
+
+
+def delete_stale_tff_events(valid_ids):
+    print("\nEski TFF kayıtları kontrol ediliyor...")
+
+    query = urllib.parse.urlencode({
+        "select": "source_event_id",
+        "source": "eq.TFF"
+    })
+
+    endpoint = SUPABASE_URL + "/rest/v1/events?" + query
+
+    status, response_text = supabase_request(endpoint)
+
+    existing = json.loads(response_text) if response_text else []
+
+    deleted = 0
+
+    for row in existing:
+        old_id = row.get("source_event_id")
+
+        if old_id and old_id not in valid_ids:
+            delete_query = urllib.parse.urlencode({
+                "source": "eq.TFF",
+                "source_event_id": "eq." + old_id
+            })
+
+            delete_endpoint = (
+                SUPABASE_URL
+                + "/rest/v1/events?"
+                + delete_query
             )
+
+            supabase_request(
+                delete_endpoint,
+                method="DELETE",
+                prefer="return=minimal"
+            )
+
+            deleted += 1
+
+    print("Eski/hatalı TFF kaydı silindi:", deleted)
 
 
 def save_source_check(source, status, count, error=None):
@@ -396,77 +450,73 @@ def save_source_check(source, status, count, error=None):
         "error_message": str(error)[:500] if error else None
     }
 
-    data = json.dumps(
-        result,
-        ensure_ascii=False
-    ).encode("utf-8")
-
-    request = urllib.request.Request(
+    status_code, _ = supabase_request(
         endpoint,
-        data=data,
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal"
-        },
-        method="POST"
+        method="POST",
+        data=result,
+        prefer="return=minimal"
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
-        print("Kaynak kontrol kaydı:", source, response.status)
+    print("Kaynak kontrol kaydı:", source, status_code)
 
 
-def run_source(name, function):
+def run_biletnerde():
     try:
-        events = function()
+        events = scrape_biletnerde()
 
         if not events:
-            print("[UYARI]", name, "için maç/etkinlik bulunamadı.")
-
-            save_source_check(
-                name,
-                "error",
-                0,
-                "Sayfaya erişildi ancak veri ayrıştırılamadı."
-            )
-
-            return []
+            raise RuntimeError("BiletNerde etkinlik ayrıştırılamadı.")
 
         save_events(events)
-        save_source_check(name, "success", len(events))
+        save_source_check("BiletNerde", "success", len(events))
 
         return events
 
     except Exception as error:
-        print("[HATA]", name, str(error))
+        print("[HATA] BiletNerde:", error)
+        save_source_check("BiletNerde", "error", 0, error)
+        return []
 
-        try:
-            save_source_check(name, "error", 0, error)
-        except Exception as save_error:
-            print("Hata kaydı yapılamadı:", save_error)
 
+def run_tff():
+    try:
+        events = scrape_tff()
+
+        if not events:
+            raise RuntimeError("TFF maçları ayrıştırılamadı.")
+
+        # Önce yeni doğru kayıtları kaydet.
+        save_events(events)
+
+        # Yeni kayıtlar başarılı olduktan sonra eski hatalı kayıtları temizle.
+        valid_ids = {
+            event["source_event_id"]
+            for event in events
+        }
+
+        delete_stale_tff_events(valid_ids)
+
+        save_source_check("TFF", "success", len(events))
+
+        return events
+
+    except Exception as error:
+        print("[HATA] TFF:", error)
+        save_source_check("TFF", "error", 0, error)
         return []
 
 
 def main():
     print("=" * 55)
-    print("TÜRKİYE BİLET TAKİP - GERÇEK VERİ TARAMASI")
+    print("TÜRKİYE BİLET TAKİP - DÜZELTİLMİŞ SÜRÜM")
     print("Zaman:", datetime.now(timezone.utc).isoformat())
     print("=" * 55)
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase GitHub Secrets eksik!")
 
-    biletnerde_events = run_source(
-        "BiletNerde",
-        scrape_biletnerde
-    )
-
-    tff_events = run_source(
-        "TFF",
-        scrape_tff
-    )
+    biletnerde_events = run_biletnerde()
+    tff_events = run_tff()
 
     total = len(biletnerde_events) + len(tff_events)
 
