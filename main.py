@@ -268,11 +268,15 @@ def is_target_biletnerde_event(title, text):
     return category in ("concert", "festival")
 
 
-def is_excluded_passo_event(title):
-    key = normalize_key(title)
+def is_excluded_passo_event(title, url=""):
+    # PASSO'nun og:title alanı bazen "Depeche Mode" gibi kısaltılmış
+    # başlık döndürüyor. Kart başlığı + URL slug birlikte kontrol edilir.
+    slug = urllib.parse.urlparse(url or "").path.rstrip("/").split("/")[-2:-1]
+    slug_text = " ".join(slug)
+    key = normalize_key((title or "") + " " + slug_text)
     excluded_terms = (
-        "karaoke", "dans gecesi", "dance night", "dj party",
-        "club night", "girls night", "happy girls night",
+        "karaoke", "dans gecesi", "dance night", "dj party", "dj night",
+        "club night", "girls night", "happy girls night", "after party",
         "tanis konus paylas dans et", "90 lar dans", "90s dance",
         "celtic pub", "depeche mode party", "party", "nightlife",
         "networking", "tanisma etkinligi", "speed dating",
@@ -611,7 +615,7 @@ def run_self_tests():
     filter_cases = [
         ("90'lar Dans Gecesi", True),
         ("Sanat Performance Karaoke Night", True),
-        ("Depeche Mode Party", True),
+        ("Depeche Mode Party", True),\n        ("Depeche Mode", True),
         ("STILL STANDING – Uraz Kaygılaroğlu", True),
         ("Nil Karaibrahimgil", False),
         ("Carpenter Brut", False),
@@ -752,7 +756,7 @@ def scrape_passo():
                 title = clean_text(item.get("title", "")) or f"PASSO etkinliği {source_id}"
 
             title_context = clean_text(title + " " + item.get("title", ""))
-            if is_excluded_passo_event(title_context):
+            if is_excluded_passo_event(title_context, item.get("url", "")):
                 print("[PASSO] Konser/festival dışı elendi:", title_context[:120])
                 continue
 
@@ -790,7 +794,40 @@ def scrape_passo():
                 "updated_at": datetime.now(timezone.utc).isoformat()
             })
         except Exception as error:
-            print(f"[UYARI] PASSO etkinlik detayı okunamadı ({source_id}):", error)
+            # PASSO listesinde görünen ancak detay sayfası 404/410 olmuş
+            # etkinliği kaybetme. Yalnızca liste başlığı/slug ile doğrulanabiliyorsa
+            # temel kayıt aç; stok, tarih ve fiyat hakkında tahmin yapma.
+            code = getattr(error, "code", None)
+            fallback_title = clean_text(item.get("title", ""))
+            fallback_slug = urllib.parse.urlparse(item.get("url", "")).path.rstrip("/").split("/")[-2:-1]
+            fallback_context = clean_text(fallback_title + " " + " ".join(fallback_slug))
+            if code in (404, 410) and fallback_context and not is_excluded_passo_event(fallback_context, item.get("url", "")):
+                fallback_category = item.get("category")
+                if fallback_category is None:
+                    fallback_category = classify_music_event(fallback_context, "")
+                    if fallback_category not in ("concert", "festival") and item.get("music_category"):
+                        fallback_category = "concert"
+                if fallback_category in ("concert", "festival", "football"):
+                    events.append({
+                        "source": "PASSO",
+                        "source_event_id": str(source_id),
+                        "title": fallback_title[:500] or fallback_context[:500],
+                        "category": fallback_category,
+                        "city": find_city(fallback_context),
+                        "venue": None,
+                        "event_date": None,
+                        "ticket_url": item["url"],
+                        "ticket_status": "unknown",
+                        "price_min": None,
+                        "price_max": None,
+                        "last_seen_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    })
+                    print(f"[PASSO] Detay sayfası {code}; liste kaydı korundu, bilet durumu doğrulanamadı:", fallback_title or fallback_slug[0])
+                else:
+                    print(f"[UYARI] PASSO etkinlik detayı okunamadı ({source_id}):", error)
+            else:
+                print(f"[UYARI] PASSO etkinlik detayı okunamadı ({source_id}):", error)
 
     events = dedupe_events(events, "PASSO")
     counts = {}
