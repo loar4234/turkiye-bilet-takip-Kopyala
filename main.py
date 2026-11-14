@@ -373,8 +373,11 @@ def scrape_biletnerde():
 
     events = dedupe_events(events, "BiletNerde")
     print("BiletNerde konser/festival bulunan:", len(events))
-    if not events and re.search(r"0\s*etkinlik|etkinlik bulunamadı|bu kriterlere uygun etkinlik bulunamadı", html, re.IGNORECASE):
-        print("[BİLGİ] BiletNerde sayfası şu anda 0 etkinlik gösteriyor.")
+    if not events:
+        if re.search(r"0\s*etkinlik|etkinlik bulunamadı|bu kriterlere uygun etkinlik bulunamadı", html, re.IGNORECASE):
+            print("[BİLGİ] BiletNerde sayfası şu anda 0 etkinlik gösteriyor.")
+        else:
+            raise RuntimeError("BiletNerde sayfası etkinlik içeriyor olabilir ancak ayrıştırıcı kayıt çıkaramadı.")
     for event in events[:8]:
         print("ETKİNLİK:", event["title"], "|", event["category"], "|", event["city"], "|", event["event_date"])
     return events
@@ -1034,11 +1037,8 @@ def run_biletnerde():
         events = scrape_biletnerde()
 
         if not events:
-            html = fetch_html(BILETNERDE_URL)
-            if re.search(r"0\s*etkinlik|etkinlik bulunamadı|bu kriterlere uygun etkinlik bulunamadı", html, re.IGNORECASE):
-                save_source_check("BiletNerde", "success", 0)
-                return events
-            raise RuntimeError("BiletNerde sayfası etkinlik içeriyor olabilir ancak ayrıştırıcı kayıt çıkaramadı.")
+            save_source_check("BiletNerde", "success", 0)
+            return events
 
         save_and_notify(events)
         save_source_check("BiletNerde", "success", len(events))
