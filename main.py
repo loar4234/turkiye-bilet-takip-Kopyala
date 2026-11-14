@@ -183,7 +183,7 @@ def normalize_key(value):
     value = value.replace("ü", "u").replace("ö", "o").replace("ç", "c")
     value = re.sub(r"^one\s+cikan\s+", "", value)
     # Liste kartlarındaki reklam/sponsor önekleri etkinlik kimliği değildir.
-    value = re.sub(r"^(?:%?\s*100\s+)?(?:metal|muzik)\s+sunar\s+", "", value)
+    value = re.sub(r"^(?:%?\s*100\s+)?(?:metal|muzik)\s+sunar(?:\s*:\s*|\s+)", "", value)
     value = re.sub(r"^one\s+cikan\s+", "", value)
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return clean_text(value)
