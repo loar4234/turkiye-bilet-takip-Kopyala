@@ -413,6 +413,18 @@ def numeric_value(value):
         return None
 
 
+def normalized_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=TR_TZ)
+        return parsed.astimezone(timezone.utc).replace(microsecond=0)
+    except (TypeError, ValueError):
+        return value
+
+
 def find_event_changes(events):
     changes = []
 
@@ -450,7 +462,7 @@ def find_event_changes(events):
 
             changed_fields = []
 
-            if (old.get("event_date") or None) != (event.get("event_date") or None):
+            if normalized_datetime(old.get("event_date")) != normalized_datetime(event.get("event_date")):
                 changed_fields.append("tarih/saat")
 
             if numeric_value(old.get("price_min")) != numeric_value(event.get("price_min")):
