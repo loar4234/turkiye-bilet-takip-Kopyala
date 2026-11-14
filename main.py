@@ -177,8 +177,29 @@ def classify_event(text):
     return "event"
 
 
+def classify_music_event(title, text):
+    combined = (title + " " + text).lower()
+    category = classify_event(combined)
+    if category in ("concert", "festival", "football"):
+        return category
+
+    # PASSO ve BiletNerde bazı konserleri yalnızca sanatçı adıyla listeliyor.
+    # Açıkça başka etkinlik türü olduğu anlaşılanları dışarıda bırakıp
+    # kalan müzik odaklı liste kartlarını konser olarak sınıflandır.
+    non_music = (
+        "tiyatro", "theatre", "theater", "stand-up", "stand up",
+        "comedy", "komedi", "bale", "ballet", "film", "sinema",
+        "workshop", "atölye", "atolye", "konferans", "conference",
+        "sergi", "exhibition", "müze", "museum", "çocuk etkinliği",
+        "kids event", "futbol", "football", "basketball", "maç bileti"
+    )
+    if any(word in combined for word in non_music):
+        return "other"
+    return "concert"
+
+
 def is_target_biletnerde_event(title, text):
-    category = classify_event(title + " " + text)
+    category = classify_music_event(title, text)
     return category in ("concert", "festival")
 
 
@@ -209,8 +230,8 @@ def scrape_biletnerde():
         if not title:
             title = text[:200]
 
-        category = classify_event(text)
-        # Kullanıcının kapsamı konser ve festival; genel/diğer etkinlikleri alma.
+        category = classify_music_event(title, text)
+        # Kullanıcının kapsamı konser ve festival; açıkça başka türde olanları alma.
         if category not in ("concert", "festival"):
             continue
 
@@ -524,7 +545,7 @@ def scrape_passo():
 
             category = item["category"]
             if category is None:
-                category = classify_event(title + " " + detail_text[:2500])
+                category = classify_music_event(title, detail_text[:2500])
                 if category not in ("concert", "festival"):
                     # PASSO genel liste sayfasındaki spor/diğer etkinlikleri kapsam dışında tut.
                     continue
