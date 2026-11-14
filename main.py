@@ -462,25 +462,46 @@ def parse_passo_date(text):
 
 
 def passo_ticket_status(text):
-    lower = unescape(text).lower()
+    lower = unescape(text or "").lower()
+    # Durum önceliği: tükenmiş > bitmek üzere > satış başlamadı > satışta.
+    # Yalnızca sayfada açıkça görülen ifadeler kullanılır; tahmin yapılmaz.
     sold_phrases = [
-        "biletler tükendi", "biletler tükenmiştir", "sold out", "all tickets are sold",
-        "no tickets available", "event is sold out", "currently unavailable"
+        "biletler tükendi", "biletler tükenmiştir", "bilet tükendi",
+        "bilet kalmadı", "bilet bulunmamaktadır", "sold out",
+        "all tickets are sold", "no tickets available",
+        "event is sold out", "currently unavailable"
     ]
     not_started_phrases = [
         "satış henüz başlamadı", "satışa henüz açılmadı",
         "not yet on sale", "sales have not started", "coming soon"
     ]
+    nearly_phrases = [
+        "son biletler", "son bilet", "tükenmek üzere", "tukenmek uzere",
+        "biletler tükeniyor", "biletler tükenmekte",
+        "az sayıda bilet", "sınırlı sayıda bilet", "sinirli sayida bilet",
+        "son birkaç bilet", "son bir kaç bilet",
+        "last few tickets", "few tickets left", "limited tickets",
+        "limited availability", "low availability", "selling fast",
+        "selling quickly", "limited seats", "last tickets"
+    ]
     if any(phrase in lower for phrase in sold_phrases):
         return "sold_out"
     if any(phrase in lower for phrase in not_started_phrases):
         return "not_on_sale"
+    if any(phrase in lower for phrase in nearly_phrases):
+        return "nearly_sold_out"
+
+    # Sayısal stok adedini kullanıcıya göstermiyoruz; yalnızca az stok sinyaline çeviriyoruz.
+    if re.search(r"\\bson\\s+\\d{1,3}\\s+bilet\\b", lower):
+        return "nearly_sold_out"
+    if re.search(r"\\b(only|just)\\s+\\d{1,3}\\s+(tickets?|seats?)\\s+left\\b", lower):
+        return "nearly_sold_out"
 
     buy_phrases = [
         "buy ticket", "buy tickets", "buy now", "bilet al",
         "hemen al", "tickets available", "select ticket", "ticket selection"
     ]
-    has_price = bool(re.search(r"(?:₺|try)\s*[\d.,]+|[\d.,]+\s*(?:₺|try)", lower))
+    has_price = bool(re.search(r"(?:₺|try)\\s*[\\d.,]+|[\\d.,]+\\s*(?:₺|try)", lower))
     # Genel "sales" kelimesi tek başına satışta kanıtı değildir.
     if any(phrase in lower for phrase in buy_phrases) and has_price:
         return "on_sale"
@@ -817,6 +838,7 @@ def notify_event_changes(changes):
         status_labels = {
             "on_sale": "Satışta",
             "sold_out": "Tükendi",
+            "nearly_sold_out": "Bitmek üzere",
             "not_on_sale": "Henüz satışta değil",
             "unknown": "Doğrulanamadı"
         }
