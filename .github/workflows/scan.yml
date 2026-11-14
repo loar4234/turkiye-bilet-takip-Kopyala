@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   scan:
@@ -24,6 +27,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Python syntax kontrolu
+        run: python -m py_compile main.py
 
       - name: Sistemi calistir
         run: python main.py
