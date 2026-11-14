@@ -703,11 +703,20 @@ def scrape_passo():
 
             category = item["category"]
             if category is None:
-                category = classify_music_event(title, detail_text[:5000])
-                if category == "unknown" and item.get("music_category"):
-                    # Açık müzik kategorisinden gelen, konser dışı olmadığı doğrulanan sanatçı kartı.
+                # Kategori kararını tüm detay metninden verme: PASSO sayfasında
+                # genel öneriler/alt bağlantılar başka etkinlik türlerinden söz edebiliyor.
+                # Önce etkinliğin kendi başlığını ve liste kartı başlığını denetle.
+                title_context = clean_text(title + " " + item.get("title", ""))
+                title_category = classify_music_event(title_context, "")
+                if title_category == "other":
+                    continue
+                if title_category in ("concert", "festival"):
+                    category = title_category
+                elif item.get("music_category"):
+                    # Resmî konser/festival kategorisindeki, başlığında türü açıkça
+                    # yazmayan etkinlikleri dahil et; dışlanan başlıklar yukarıda elenir.
                     category = "concert"
-                if category not in ("concert", "festival"):
+                else:
                     continue
 
             price_min, price_max = parse_prices(detail_text)
