@@ -615,8 +615,7 @@ def run_self_tests():
     filter_cases = [
         ("90'lar Dans Gecesi", True),
         ("Sanat Performance Karaoke Night", True),
-        ("Depeche Mode Party", True),\n        ("Depeche Mode", True),
-        ("STILL STANDING – Uraz Kaygılaroğlu", True),
+        ("Depeche Mode Party", True),\n        ("STILL STANDING – Uraz Kaygılaroğlu", True),
         ("Nil Karaibrahimgil", False),
         ("Carpenter Brut", False),
         ("Gazapizm konseri", False),
@@ -625,6 +624,12 @@ def run_self_tests():
         actual = is_excluded_passo_event(title)
         if actual != expected:
             raise RuntimeError(f"Etkinlik filtre testi başarısız: {title}")
+
+    # PASSO og:title yalnızca sanatçı adını verse bile URL slug'ındaki
+    # "party" ibaresi gerçek taramada filtreyi tetiklemeli.
+    party_url = "https://ssrprod.passo.com.tr/en/event/depeche-mode-party-the-wall-kadikoy/12721321"
+    if not is_excluded_passo_event("Depeche Mode", party_url):
+        raise RuntimeError("Etkinlik filtre testi başarısız: Depeche Mode party URL")
 
     print("[TEST] Etkinlik filtresi ve bilet durumu testleri başarılı.")
 
