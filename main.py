@@ -256,8 +256,8 @@ def classify_music_event(title, text):
         "jazz", "caz", "metal", "orchestra", "tour"
     )):
         return "concert"
-    # Artist-only event cards on music-category listings are concerts.
-    return "concert"
+    # Kaynak/kategori bağlamı olmadan belirsiz etkinliği konser varsayma.
+    return "unknown"
 
 
 def is_target_biletnerde_event(title, text):
@@ -266,58 +266,113 @@ def is_target_biletnerde_event(title, text):
 
 
 def scrape_biletnerde():
-    print("\n--- BİLETNERDE TARAMASI (KONSER/FESTİVAL) ---")
+    print("\\n--- BİLETNERDE TARAMASI (KONSER/FESTİVAL) ---")
     html = fetch_html(BILETNERDE_URL)
-    parser = AnchorParser()
-    parser.feed(html)
     events = []
     seen = set()
 
+    # Önce JSON-LD Event kayıtlarını oku; kart HTML'i değişse de veri korunur.
+    jsonld_blocks = re.findall(
+        r'<script[^>]+type=["\\']application/ld\\+json["\\'][^>]*>(.*?)</script>',
+        html, re.IGNORECASE | re.DOTALL
+    )
+    for block in jsonld_blocks:
+        try:
+            payload = json.loads(block.strip())
+        except (ValueError, TypeError):
+            continue
+        stack = payload if isinstance(payload, list) else [payload]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, list):
+                stack.extend(obj)
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if isinstance(obj.get("@graph"), list):
+                stack.extend(obj["@graph"])
+            typ = obj.get("@type", [])
+            types = [typ] if isinstance(typ, str) else typ
+            if not any(str(x).lower() == "event" for x in types):
+                continue
+            title = clean_text(str(obj.get("name") or ""))
+            description = clean_text(str(obj.get("description") or ""))
+            category = classify_music_event(title, title + " " + description)
+            if not title or category not in ("concert", "festival"):
+                continue
+            raw_url = str(obj.get("url") or BILETNERDE_URL)
+            full_url = urllib.parse.urljoin(BILETNERDE_URL, raw_url)
+            sid = urllib.parse.urlparse(full_url).path.rstrip("/") or title
+            if sid in seen:
+                continue
+            seen.add(sid)
+            location = obj.get("location") or {}
+            address = location.get("address") or {} if isinstance(location, dict) else {}
+            city = address.get("addressLocality") if isinstance(address, dict) else None
+            venue = location.get("name") if isinstance(location, dict) else None
+            date_value = None
+            if obj.get("startDate"):
+                try:
+                    dt = datetime.fromisoformat(str(obj["startDate"]).replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=TR_TZ)
+                    date_value = dt.isoformat()
+                except ValueError:
+                    date_value = parse_event_date(str(obj["startDate"]))
+            offers = obj.get("offers") or {}
+            if isinstance(offers, list):
+                offers = offers[0] if offers else {}
+            pmin, pmax = parse_prices(description)
+            try:
+                if isinstance(offers, dict) and offers.get("price") is not None:
+                    pmin = pmax = float(str(offers["price"]).replace(",", "."))
+            except (TypeError, ValueError):
+                pass
+            events.append({
+                "source": "BiletNerde", "source_event_id": str(sid)[:250],
+                "title": title[:500], "category": category,
+                "city": city or find_city(description), "venue": venue,
+                "event_date": date_value, "ticket_url": full_url,
+                "ticket_status": "unknown", "price_min": pmin, "price_max": pmax,
+                "last_seen_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            })
+
+    # Ardından HTML detay bağlantılarını tara; eski/yeni URL yollarını destekle.
+    parser = AnchorParser()
+    parser.feed(html)
     for anchor in parser.anchors:
-        href = anchor["href"]
-        text = clean_text(anchor["text"])
-        if "/etkinlik/" not in href or len(text) < 8:
+        href = unescape(anchor.get("href", "")).strip()
+        title_text = clean_text(anchor.get("text", ""))
+        if not href or len(title_text) < 3:
             continue
         full_url = urllib.parse.urljoin(BILETNERDE_URL, href)
-        query = urllib.parse.parse_qs(urllib.parse.urlparse(full_url).query)
-        source_id = query.get("eid", [None])[0] or urllib.parse.urlparse(full_url).path
-        if source_id in seen:
+        path = urllib.parse.urlparse(full_url).path.lower().rstrip("/")
+        if not any(token in path for token in ("/etkinlik/", "/etkinlikler/", "/event/")):
             continue
-
-        title = re.sub(
-            r"\d{1,2}\s*(?:-\s*\d{1,2}\s*)?(?:Ocak|Şubat|Subat|Mart|Nisan|Mayıs|Mayis|Haziran|Temmuz|Ağustos|Agustos|Eylül|Eylul|Ekim|Kasım|Kasim|Aralık|Aralik)\s+\d{4}.*$",
-            "", text, flags=re.IGNORECASE
-        )
-        title = clean_text(re.sub(r"₺\s*[\d.,]+.*$", "", title))
-        if not title:
-            title = text[:200]
-
-        category = classify_music_event(title, text)
-        # Kullanıcının kapsamı konser ve festival; açıkça başka türde olanları alma.
+        if path in ("/etkinlik", "/etkinlikler", "/event"):
+            continue
+        category = classify_music_event(title_text, title_text)
         if category not in ("concert", "festival"):
             continue
-
-        seen.add(source_id)
-        event_date = parse_event_date(text)
-        price_min, price_max = parse_prices(text)
+        sid = urllib.parse.urlparse(full_url).path.rstrip("/")
+        if sid in seen:
+            continue
+        seen.add(sid)
         events.append({
-            "source": "BiletNerde",
-            "source_event_id": str(source_id),
-            "title": title[:500],
-            "category": category,
-            "city": find_city(text),
-            "venue": None,
-            "event_date": event_date,
-            "ticket_url": full_url,
-            "ticket_status": "unknown",
-            "price_min": price_min,
-            "price_max": price_max,
+            "source": "BiletNerde", "source_event_id": sid[:250],
+            "title": title_text[:500], "category": category,
+            "city": find_city(title_text), "venue": None,
+            "event_date": parse_event_date(title_text), "ticket_url": full_url,
+            "ticket_status": "unknown", "price_min": None, "price_max": None,
             "last_seen_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
 
     events = dedupe_events(events, "BiletNerde")
     print("BiletNerde konser/festival bulunan:", len(events))
+    if not events and re.search(r"0\\s*etkinlik|etkinlik bulunamadı|bu kriterlere uygun etkinlik bulunamadı", html, re.IGNORECASE):
+        print("[BİLGİ] BiletNerde sayfası şu anda 0 etkinlik gösteriyor.")
     for event in events[:8]:
         print("ETKİNLİK:", event["title"], "|", event["category"], "|", event["city"], "|", event["event_date"])
     return events
@@ -484,6 +539,14 @@ def passo_ticket_status(text):
         "limited availability", "low availability", "selling fast",
         "selling quickly", "limited seats", "last tickets"
     ]
+    # Schema.org/JSON-LD stok sinyalleri varsa doğrudan kullan.
+    structured = lower.replace("\\/", "/")
+    if re.search(r'"availability"\s*:\s*"[^"]*(?:soldout|sold_out)', structured) or "schema.org/soldout" in structured:
+        return "sold_out"
+    if re.search(r'"availability"\s*:\s*"[^"]*(?:limitedavailability|limited_availability)', structured) or "schema.org/limitedavailability" in structured:
+        return "nearly_sold_out"
+    if re.search(r'"availability"\s*:\s*"[^"]*(?:instock|in_stock)', structured) or "schema.org/instock" in structured:
+        return "on_sale"
     if any(phrase in lower for phrase in sold_phrases):
         return "sold_out"
     if any(phrase in lower for phrase in not_started_phrases):
@@ -540,7 +603,8 @@ def extract_passo_event_links(html, listing_url, listing_type):
         if len(title) < 3:
             continue
         category = "football" if listing_type == "football" else None
-        found[source_id] = {"url": full_url, "title": title, "category": category}
+        found[source_id] = {"url": full_url, "title": title, "category": category,
+                            "music_category": "music-concerts-festival-tickets" in listing_url.lower()}
 
     # SSR/Next.js sayfalarında bazı etkinlikler bağlantı yerine gömülü JSON içinde bulunabiliyor.
     # Yalnızca gerçek /event/<slug>/<numeric-id> desenlerini al; rastgele sayıları etkinlik sanma.
@@ -551,7 +615,8 @@ def extract_passo_event_links(html, listing_url, listing_type):
             found[source_id] = {
                 "url": full_url,
                 "title": "",
-                "category": "football" if listing_type == "football" else None
+                "category": "football" if listing_type == "football" else None,
+                "music_category": "music-concerts-festival-tickets" in listing_url.lower()
             }
     return found
 
@@ -605,7 +670,10 @@ def scrape_passo():
                 if listing_type == "football":
                     discovered[source_id] = item
                 else:
-                    discovered.setdefault(source_id, item)
+                    if source_id not in discovered:
+                        discovered[source_id] = item
+                    elif item.get("music_category"):
+                        discovered[source_id]["music_category"] = True
         except Exception as error:
             print(f"[UYARI] PASSO liste sayfası okunamadı ({listing_type}):", error)
 
@@ -630,9 +698,11 @@ def scrape_passo():
 
             category = item["category"]
             if category is None:
-                category = classify_music_event(title, detail_text[:2500])
+                category = classify_music_event(title, detail_text[:5000])
+                if category == "unknown" and item.get("music_category"):
+                    # Açık müzik kategorisinden gelen, konser dışı olmadığı doğrulanan sanatçı kartı.
+                    category = "concert"
                 if category not in ("concert", "festival"):
-                    # PASSO genel liste sayfasındaki spor/diğer etkinlikleri kapsam dışında tut.
                     continue
 
             price_min, price_max = parse_prices(detail_text)
@@ -962,7 +1032,10 @@ def run_biletnerde():
         events = scrape_biletnerde()
 
         if not events:
-            raise RuntimeError("BiletNerde etkinlik ayrıştırılamadı.")
+            # Kaynak bu taramada etkinlik göstermiyorsa boş sonucu kaydet;
+            # diğer kaynakların taranmasını kesme.
+            save_source_check("BiletNerde", "success", 0)
+            return events
 
         save_and_notify(events)
         save_source_check("BiletNerde", "success", len(events))
