@@ -389,7 +389,7 @@ def parse_passo_date(text):
 def passo_ticket_status(text):
     lower = text.lower()
     sold_phrases = [
-        "tükendi", "biletler tükendi", "sold out",
+        "biletler tükendi", "tükendi", "sold out",
         "all tickets are sold", "no tickets available"
     ]
     not_started_phrases = [
@@ -401,10 +401,30 @@ def passo_ticket_status(text):
     if any(phrase in lower for phrase in not_started_phrases):
         return "not_on_sale"
 
-    # PASSO detay sayfasında satış kategorileri ve ₺ fiyatları varsa satış açık.
-    if re.search(r"\b(?:sales|satış)\b", lower) and re.search(r"₺\s*[\d.,]+", text):
+    # Sadece açık satın alma çağrısı ve fiyat birlikte görünüyorsa satışta say.
+    buy_phrases = [
+        "buy ticket", "buy tickets", "buy now",
+        "bilet al", "hemen al", "tickets available"
+    ]
+    if any(phrase in lower for phrase in buy_phrases) and re.search(r"(?:₺|try)\s*[\d.,]+|[\d.,]+\s*(?:₺|try)", lower):
         return "on_sale"
     return "unknown"
+
+
+def passo_metadata_title(html):
+    patterns = [
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
+        r'<title[^>]*>(.*?)</title>'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+        if match:
+            value = clean_text(html_unescape(match.group(1)))
+            value = re.sub(r"\s*[|–-]\s*PASSO.*$", "", value, flags=re.IGNORECASE)
+            if len(value) > 3 and "share:" not in value.lower():
+                return value
+    return None
 
 
 def scrape_passo():
@@ -455,11 +475,11 @@ def scrape_passo():
             parser = TextParser()
             parser.feed(detail_html)
             detail_text = clean_text(" ".join(parser.parts))
-            title = item["title"]
+            title = passo_metadata_title(detail_html) or item["title"]
 
-            # Sayfa başlığından daha temiz bir etkinlik adı bulmaya çalış.
+            # Bazı PASSO sayfalarında metin içinde etkinlik başlığı ayrıca bulunuyor.
             heading_match = re.search(r"TICKET DETAILS\s+(.+?)\s+(?:\d{1,2}\s+\w+|Sales|Ticket Information)", detail_text, re.IGNORECASE)
-            if heading_match:
+            if heading_match and (not title or "share:" in title.lower()):
                 candidate = clean_text(heading_match.group(1))
                 if len(candidate) >= 3:
                     title = candidate
