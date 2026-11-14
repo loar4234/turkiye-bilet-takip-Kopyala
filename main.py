@@ -319,15 +319,8 @@ def scrape_tff():
 
 
 def parse_passo_date(text):
-    # PASSO etkinlik detaylarında Türkçe veya İngilizce tarih biçimleri bulunabiliyor.
-    m = re.search(r"(\d{1,2})[./ -]+(\d{1,2})[./ -]+(\d{4})\s*(?:Saat:?\s*)?(\d{1,2}):(\d{2})", text, re.IGNORECASE)
-    if m:
-        try:
-            return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)),
-                            int(m.group(4)), int(m.group(5)), tzinfo=TR_TZ).isoformat()
-        except ValueError:
-            pass
-
+    # Önce etkinliğin yazıyla belirtilen tarihini bul. Sayısal tarihler
+    # çoğu zaman öncelikli satış başlangıcıdır; etkinlik tarihi değildir.
     months = {
         "january": 1, "jan": 1, "ocak": 1,
         "february": 2, "feb": 2, "şubat": 2, "subat": 2,
@@ -342,28 +335,52 @@ def parse_passo_date(text):
         "november": 11, "nov": 11, "kasım": 11, "kasim": 11,
         "december": 12, "dec": 12, "aralık": 12, "aralik": 12
     }
+    month_pattern = "|".join(sorted(months, key=len, reverse=True))
     m = re.search(
-        r"(\d{1,2})\s+([A-Za-zÇĞİÖŞÜçğıöşü]+)\s+(\d{4})(?:[^\d]{0,30}(\d{1,2}):(\d{2}))?",
+        rf"(\d{1,2})\s+({month_pattern})\s+(\d{4})(?:[^\d]{{0,35}}(\d{1,2}):(\d{2}))?",
         text, re.IGNORECASE
     )
     if m:
         month = months.get(m.group(2).lower())
-        if month:
-            try:
-                return datetime(
-                    int(m.group(3)), month, int(m.group(1)),
-                    int(m.group(4) or 0), int(m.group(5) or 0),
-                    tzinfo=TR_TZ
-                ).isoformat()
-            except ValueError:
-                pass
+        try:
+            return datetime(
+                int(m.group(3)), month, int(m.group(1)),
+                int(m.group(4) or 0), int(m.group(5) or 0),
+                tzinfo=TR_TZ
+            ).isoformat()
+        except (ValueError, TypeError):
+            pass
+
+    # Türkçe PASSO detaylarında "21 Kasım 2026 Saat: 19:00" formatı.
+    m = re.search(
+        r"(\d{1,2})\s+(" + month_pattern + r")\s+(\d{4})\s*(?:Saat:?\s*)?(\d{1,2}):(\d{2})",
+        text, re.IGNORECASE
+    )
+    if m:
+        month = months.get(m.group(2).lower())
+        try:
+            return datetime(
+                int(m.group(3)), month, int(m.group(1)),
+                int(m.group(4)), int(m.group(5)), tzinfo=TR_TZ
+            ).isoformat()
+        except (ValueError, TypeError):
+            pass
+
+    # Sayısal biçimi yalnızca metin tarih biçimi bulunamadığında kullan.
+    m = re.search(r"(\d{1,2})[./ -]+(\d{1,2})[./ -]+(\d{4})\s*(?:Saat:?\s*)?(\d{1,2}):(\d{2})", text, re.IGNORECASE)
+    if m:
+        try:
+            return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)),
+                            int(m.group(4)), int(m.group(5)), tzinfo=TR_TZ).isoformat()
+        except ValueError:
+            pass
     return None
 
 
 def passo_ticket_status(text):
     lower = unescape(text).lower()
     sold_phrases = [
-        "biletler tükendi", "tükendi", "sold out", "all tickets are sold",
+        "biletler tükendi", "biletler tükenmiştir", "sold out", "all tickets are sold",
         "no tickets available", "event is sold out", "currently unavailable"
     ]
     not_started_phrases = [
@@ -376,11 +393,11 @@ def passo_ticket_status(text):
         return "not_on_sale"
 
     buy_phrases = [
-        "buy ticket", "buy tickets", "buy now", "bilet al",
+        "buy ticket", "buy tickets", "buy now", "buy", "bilet al",
         "hemen al", "tickets available", "select ticket", "ticket selection"
     ]
     has_price = bool(re.search(r"(?:₺|try)\s*[\d.,]+|[\d.,]+\s*(?:₺|try)", lower))
-    if any(phrase in lower for phrase in buy_phrases) and has_price:
+    if (any(phrase in lower for phrase in buy_phrases) or "sales" in lower) and has_price:
         return "on_sale"
     return "unknown"
 
@@ -464,7 +481,7 @@ def scrape_passo():
             title = passo_metadata_title(detail_html) or item.get("title") or ""
 
             heading_match = re.search(
-                r"TICKET DETAILS\\s+(.+?)\\s+(?:\\d{1,2}\\s+\\w+|Sales|Ticket Information)",
+                r"TICKET DETAILS\s+(.+?)\s+(?:\d{1,2}\s+\w+|Sales|Ticket Information)",
                 detail_text, re.IGNORECASE
             )
             if heading_match and (not title or "share:" in title.lower()):
