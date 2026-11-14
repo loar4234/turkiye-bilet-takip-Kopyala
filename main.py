@@ -395,7 +395,8 @@ def scrape_ticket_platform(source, urls):
             parsed = urllib.parse.urlparse(full_url)
             host = (parsed.hostname or "").lower()
             if not (host.endswith("biletix.com") or host.endswith("bubilet.com.tr")
-                    or host.endswith("biletinial.com") or host.endswith("mobilet.com")\n                    or host.endswith("biletino.com")):
+                    or host.endswith("biletinial.com") or host.endswith("mobilet.com")
+                    or host.endswith("biletino.com")):
                 continue
             path = parsed.path.lower().rstrip("/")
             if not path or path in ("/", "/tr", "/tr-tr", "/anasayfa/turkiye/tr", "/tr/muzik"):
