@@ -615,7 +615,8 @@ def run_self_tests():
     filter_cases = [
         ("90'lar Dans Gecesi", True),
         ("Sanat Performance Karaoke Night", True),
-        ("Depeche Mode Party", True),\n        ("STILL STANDING – Uraz Kaygılaroğlu", True),
+        ("Depeche Mode Party", True),
+        ("STILL STANDING – Uraz Kaygılaroğlu", True),
         ("Nil Karaibrahimgil", False),
         ("Carpenter Brut", False),
         ("Gazapizm konseri", False),
