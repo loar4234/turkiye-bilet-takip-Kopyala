@@ -1451,6 +1451,7 @@ def main():
     bubilet_events = run_bubilet()
     biletinial_events = run_biletinial()
     mobilet_events = run_mobilet()
+    biletino_events = run_biletino()
     passo_events = run_passo()
     tff_events = run_tff()
 
@@ -1463,6 +1464,7 @@ def main():
     print("Bubilet:", len(bubilet_events))
     print("Biletinial:", len(biletinial_events))
     print("Mobilet:", len(mobilet_events))
+    print("Biletino:", len(biletino_events))
     print("PASSO:", len(passo_events))
     print("TFF:", len(tff_events))
     print("TOPLAM:", total)
