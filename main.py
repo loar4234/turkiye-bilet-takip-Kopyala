@@ -177,24 +177,66 @@ def classify_event(text):
     return "event"
 
 
-def classify_music_event(title, text):
-    combined = (title + " " + text).lower()
-    category = classify_event(combined)
-    if category in ("concert", "festival", "football"):
-        return category
+def normalize_key(value):
+    value = unescape(value or "").lower()
+    value = value.replace("ı", "i").replace("ş", "s").replace("ğ", "g")
+    value = value.replace("ü", "u").replace("ö", "o").replace("ç", "c")
+    value = re.sub(r"^one\s+cikan\s+", "", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return clean_text(value)
 
-    # PASSO ve BiletNerde bazı konserleri yalnızca sanatçı adıyla listeliyor.
-    # Açıkça başka etkinlik türü olduğu anlaşılanları dışarıda bırakıp
-    # kalan müzik odaklı liste kartlarını konser olarak sınıflandır.
+
+def dedupe_events(events, source):
+    # Aynı etkinliğin farklı kart/URL başlıklarını tek kayda indir.
+    # Aynı sanatçının farklı günlerdeki konserleri ayrı kalır.
+    unique = {}
+    for event in events:
+        date_part = (event.get("event_date") or "")[:10]
+        title_key = normalize_key(event.get("title"))
+        city_key = normalize_key(event.get("city"))
+        key = (title_key, city_key, date_part, event.get("category"))
+        if key not in unique:
+            unique[key] = event
+            continue
+        current = unique[key]
+        # Bilgisi daha dolu kaydı koru; URL ve kaynak kimliği kaybolmasın.
+        score_new = sum(event.get(k) not in (None, "", "unknown") for k in
+                        ("event_date", "city", "venue", "price_min", "price_max"))
+        score_old = sum(current.get(k) not in (None, "", "unknown") for k in
+                        ("event_date", "city", "venue", "price_min", "price_max"))
+        if score_new > score_old:
+            unique[key] = event
+    result = list(unique.values())
+    removed = len(events) - len(result)
+    if removed:
+        print(f"[{source}] Aynı etkinliğin {removed} mükerrer kaydı ayıklandı.")
+    return result
+
+
+def classify_music_event(title, text):
+    combined = normalize_key(title + " " + text)
+    # Açıkça konser olmayan etkinlikleri sanatçı adı içeriyor diye konser sayma.
     non_music = (
-        "tiyatro", "theatre", "theater", "stand-up", "stand up",
+        "tiyatro", "theatre", "theater", "stand up", "still standing",
         "comedy", "komedi", "bale", "ballet", "film", "sinema",
-        "workshop", "atölye", "atolye", "konferans", "conference",
-        "sergi", "exhibition", "müze", "museum", "çocuk etkinliği",
-        "kids event", "futbol", "football", "basketball", "maç bileti"
+        "workshop", "atolye", "konferans", "conference", "sergi",
+        "exhibition", "muze", "museum", "cocuk etkinligi", "kids event",
+        "futbol", "football", "basketball", "mac bileti", "karaoke",
+        "dans gecesi", "dance night", "dj party", "club night",
+        "talk show", "soylesi", "sohbet", "standup"
     )
     if any(word in combined for word in non_music):
         return "other"
+    if "festival" in combined or "festivali" in combined:
+        return "festival"
+    if any(word in combined for word in ("mac", "futbol", "football", "basketball")):
+        return "football"
+    if any(word in combined for word in (
+        "konser", "concert", "music", "muzik", "symphony", "live performance",
+        "jazz", "caz", "metal", "orchestra", "tour"
+    )):
+        return "concert"
+    # Artist-only event cards on music-category listings are concerts.
     return "concert"
 
 
@@ -254,6 +296,7 @@ def scrape_biletnerde():
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
 
+    events = dedupe_events(events, "BiletNerde")
     print("BiletNerde konser/festival bulunan:", len(events))
     for event in events[:8]:
         print("ETKİNLİK:", event["title"], "|", event["category"], "|", event["city"], "|", event["event_date"])
@@ -414,11 +457,12 @@ def passo_ticket_status(text):
         return "not_on_sale"
 
     buy_phrases = [
-        "buy ticket", "buy tickets", "buy now", "buy", "bilet al",
+        "buy ticket", "buy tickets", "buy now", "bilet al",
         "hemen al", "tickets available", "select ticket", "ticket selection"
     ]
     has_price = bool(re.search(r"(?:₺|try)\s*[\d.,]+|[\d.,]+\s*(?:₺|try)", lower))
-    if (any(phrase in lower for phrase in buy_phrases) or "sales" in lower) and has_price:
+    # Genel "sales" kelimesi tek başına satışta kanıtı değildir.
+    if any(phrase in lower for phrase in buy_phrases) and has_price:
         return "on_sale"
     return "unknown"
 
@@ -572,6 +616,7 @@ def scrape_passo():
         except Exception as error:
             print(f"[UYARI] PASSO etkinlik detayı okunamadı ({source_id}):", error)
 
+    events = dedupe_events(events, "PASSO")
     counts = {}
     for event in events:
         counts[event["ticket_status"]] = counts.get(event["ticket_status"], 0) + 1
@@ -774,10 +819,42 @@ def notify_event_changes(changes):
         telegram_send("\n".join(lines))
 
 
+def merge_existing_data(events):
+    grouped = {}
+    for event in events:
+        grouped.setdefault(event["source"], []).append(event)
+    for source, source_events in grouped.items():
+        endpoint = (SUPABASE_URL + "/rest/v1/events?" +
+                    urllib.parse.urlencode({
+                        "select": "source_event_id,event_date,price_min,price_max,ticket_status,city,venue",
+                        "source": f"eq.{source}"
+                    }))
+        try:
+            _, raw = supabase_request(endpoint, method="GET")
+            rows = json.loads(raw or "[]")
+            existing = {str(row.get("source_event_id")): row for row in rows}
+        except Exception as error:
+            print(f"[UYARI] {source} eski veriler birleştirilemedi:", error)
+            continue
+        for event in source_events:
+            old = existing.get(str(event["source_event_id"]))
+            if not old:
+                continue
+            for field in ("event_date", "price_min", "price_max", "city", "venue"):
+                if event.get(field) in (None, "") and old.get(field) not in (None, ""):
+                    event[field] = old[field]
+            if event.get("ticket_status") in (None, "", "unknown") and old.get("ticket_status") not in (None, "", "unknown"):
+                event["ticket_status"] = old["ticket_status"]
+    return events
+
+
 def save_and_notify(events):
     if not events:
         return
 
+    # Kaynakta bilgi geçici olarak eksikse, DB'deki doğrulanmış veriyi
+    # unknown/None ile ezme. Bu özellikle stok durumu bildirimlerini korur.
+    events = merge_existing_data(events)
     changes = find_event_changes(events)
     save_events(events)
 
