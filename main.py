@@ -593,6 +593,38 @@ def passo_ticket_status(text):
         return "on_sale"
     return "unknown"
 
+def run_self_tests():
+    """Kritik filtre ve stok sınıflandırma kurallarını her çalıştırmada doğrula."""
+    cases = [
+        (passo_ticket_status("Sold Out"), "sold_out"),
+        (passo_ticket_status("Biletler tükendi"), "sold_out"),
+        (passo_ticket_status("Limited availability"), "nearly_sold_out"),
+        (passo_ticket_status("Only 4 tickets left"), "nearly_sold_out"),
+        (passo_ticket_status("Coming soon"), "not_on_sale"),
+        (passo_ticket_status("Buy tickets ₺750"), "on_sale"),
+        (passo_ticket_status("Ticket details and venue information"), "unknown"),
+    ]
+    for actual, expected in cases:
+        if actual != expected:
+            raise RuntimeError(f"Stok sınıflandırma testi başarısız: {actual} != {expected}")
+
+    filter_cases = [
+        ("90'lar Dans Gecesi", True),
+        ("Sanat Performance Karaoke Night", True),
+        ("Depeche Mode Party", True),
+        ("STILL STANDING – Uraz Kaygılaroğlu", True),
+        ("Nil Karaibrahimgil", False),
+        ("Carpenter Brut", False),
+        ("Gazapizm konseri", False),
+    ]
+    for title, expected in filter_cases:
+        actual = is_excluded_passo_event(title)
+        if actual != expected:
+            raise RuntimeError(f"Etkinlik filtre testi başarısız: {title}")
+
+    print("[TEST] Etkinlik filtresi ve bilet durumu testleri başarılı.")
+
+
 def passo_metadata_title(html):
     patterns = [
         r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
@@ -1141,6 +1173,7 @@ def main():
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase GitHub Secrets eksik!")
 
+    run_self_tests()
     biletnerde_events = run_biletnerde()
     passo_events = run_passo()
     tff_events = run_tff()
