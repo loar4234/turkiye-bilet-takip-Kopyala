@@ -10,6 +10,8 @@ from html.parser import HTMLParser
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 BILETNERDE_URL = "https://biletnerde.com/etkinlikler"
 TFF_URL = "https://www.tff.org/default.aspx?pageID=198"
@@ -369,6 +371,160 @@ def supabase_request(endpoint, method="GET", data=None, prefer=None):
         return response.status, result
 
 
+
+def telegram_send(message):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[UYARI] Telegram Secrets eksik; bildirim gönderilmedi.")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = urllib.parse.urlencode({
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": "true"
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            if result.get("ok"):
+                print("[TELEGRAM] Bildirim gönderildi.")
+                return True
+            print("[TELEGRAM HATA]", result)
+    except Exception as error:
+        print("[TELEGRAM HATA]", error)
+
+    return False
+
+
+def numeric_value(value):
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def find_event_changes(events):
+    changes = []
+
+    by_source = {}
+    for event in events:
+        by_source.setdefault(event["source"], []).append(event)
+
+    for source, source_events in by_source.items():
+        endpoint = (
+            SUPABASE_URL
+            + "/rest/v1/events?"
+            + urllib.parse.urlencode({
+                "select": "source_event_id,title,event_date,price_min,price_max",
+                "source": f"eq.{source}"
+            })
+        )
+
+        try:
+            _, result = supabase_request(endpoint, method="GET")
+            existing_rows = json.loads(result or "[]")
+            existing = {
+                str(row.get("source_event_id")): row
+                for row in existing_rows
+            }
+        except Exception as error:
+            print(f"[UYARI] {source} eski kayıtları okunamadı; bildirim kontrolü atlandı:", error)
+            continue
+
+        for event in source_events:
+            old = existing.get(str(event["source_event_id"]))
+
+            if old is None:
+                changes.append(("new", event, []))
+                continue
+
+            changed_fields = []
+
+            if (old.get("event_date") or None) != (event.get("event_date") or None):
+                changed_fields.append("tarih/saat")
+
+            if numeric_value(old.get("price_min")) != numeric_value(event.get("price_min")):
+                changed_fields.append("en düşük fiyat")
+
+            if numeric_value(old.get("price_max")) != numeric_value(event.get("price_max")):
+                changed_fields.append("en yüksek fiyat")
+
+            if changed_fields:
+                changes.append(("updated", event, changed_fields))
+
+    return changes
+
+
+def notify_event_changes(changes):
+    for change_type, event, fields in changes:
+        if change_type == "new":
+            heading = "🆕 YENİ ETKİNLİK / MAÇ"
+        else:
+            heading = "🔔 ETKİNLİK BİLGİSİ DEĞİŞTİ: " + ", ".join(fields)
+
+        category = {
+            "football": "Süper Lig maçı",
+            "concert": "Konser",
+            "festival": "Festival",
+            "event": "Etkinlik"
+        }.get(event.get("category"), "Etkinlik")
+
+        date_text = event.get("event_date") or "Tarih belirtilmemiş"
+        if date_text != "Tarih belirtilmemiş":
+            try:
+                date_text = datetime.fromisoformat(date_text).strftime("%d.%m.%Y %H:%M")
+            except ValueError:
+                pass
+
+        lines = [
+            heading,
+            f"Tür: {category}",
+            f"Adı: {event.get('title') or 'Bilinmiyor'}",
+            f"Tarih: {date_text}"
+        ]
+
+        if event.get("city"):
+            lines.append(f"Şehir: {event['city']}")
+
+        low = event.get("price_min")
+        high = event.get("price_max")
+        if low is not None or high is not None:
+            if low is not None and high is not None and low != high:
+                lines.append(f"Fiyat: {low} - {high} TL")
+            else:
+                lines.append(f"Fiyat: {low if low is not None else high} TL")
+
+        if event.get("ticket_url"):
+            lines.append(f"Bilet bağlantısı: {event['ticket_url']}")
+
+        telegram_send("\\n".join(lines))
+
+
+def save_and_notify(events):
+    if not events:
+        return
+
+    changes = find_event_changes(events)
+    save_events(events)
+
+    if changes:
+        print("Telegram bildirimi gereken değişiklik:", len(changes))
+        notify_event_changes(changes)
+    else:
+        print("Yeni etkinlik veya fiyat/tarih değişikliği yok.")
+
+
+
 def save_events(events):
     if not events:
         print("Kaydedilecek etkinlik yok.")
@@ -425,7 +581,7 @@ def run_biletnerde():
         if not events:
             raise RuntimeError("BiletNerde etkinlik ayrıştırılamadı.")
 
-        save_events(events)
+        save_and_notify(events)
         save_source_check("BiletNerde", "success", len(events))
 
         return events
@@ -444,7 +600,7 @@ def run_tff():
             raise RuntimeError("TFF maçları ayrıştırılamadı.")
 
         # Yalnızca bulunan maçları ekle/güncelle; diğer TFF kayıtlarını silme.
-        save_events(events)
+        save_and_notify(events)
 
         save_source_check("TFF", "success", len(events))
 
@@ -464,6 +620,9 @@ def main():
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase GitHub Secrets eksik!")
+
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        telegram_send("✅ Türkiye Bilet Takip bot bağlantı testi başarılı. Telegram bildirimleri aktif.")
 
     biletnerde_events = run_biletnerde()
     tff_events = run_tff()
