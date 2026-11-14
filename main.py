@@ -379,7 +379,7 @@ def passo_ticket_status(text):
         "buy ticket", "buy tickets", "buy now", "bilet al",
         "hemen al", "tickets available", "select ticket", "ticket selection"
     ]
-    has_price = bool(re.search(r"(?:₺|try)\\s*[\\d.,]+|[\\d.,]+\\s*(?:₺|try)", lower))
+    has_price = bool(re.search(r"(?:₺|try)\s*[\d.,]+|[\d.,]+\s*(?:₺|try)", lower))
     if any(phrase in lower for phrase in buy_phrases) and has_price:
         return "on_sale"
     return "unknown"
@@ -421,7 +421,7 @@ def extract_passo_event_links(html, listing_url, listing_type):
 
     # SSR/Next.js sayfalarında bazı etkinlikler bağlantı yerine gömülü JSON içinde bulunabiliyor.
     # Yalnızca gerçek /event/<slug>/<numeric-id> desenlerini al; rastgele sayıları etkinlik sanma.
-    for match in re.finditer(r'["\\']([^"\\']*/event/[^"\\']*/(\\d{5,})[^"\\']*)["\\']', html, re.IGNORECASE):
+    for match in re.finditer(r"[\"']([^\"']*/event/[^\"']*/(\d{5,})[^\"']*)[\"']", html, re.IGNORECASE):
         raw_url, source_id = match.group(1), match.group(2)
         full_url = urllib.parse.urljoin(listing_url, unescape(raw_url).replace("\\/", "/"))
         if source_id not in found:
