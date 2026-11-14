@@ -454,15 +454,47 @@ def scrape_passo():
     print("\n--- PASSO TARAMASI (KONSER/FESTİVAL + SÜPER LİG) ---")
     discovered = {}
 
+    # Ana sayfanın yanı sıra PASSO'nun kendi konser/festival kategori sayfalarını da tara.
     listing_pages = [
         ("concert_event", PASSO_EVENT_URL),
         ("football", PASSO_SUPERLIG_URL)
     ]
+
+    try:
+        home_html = fetch_html(PASSO_EVENT_URL)
+        home_parser = AnchorParser()
+        home_parser.feed(home_html)
+        category_seen = {PASSO_EVENT_URL, PASSO_SUPERLIG_URL}
+        category_keywords = (
+            "concert", "music", "festival", "konser", "muzik",
+            "müzik", "metal", "jazz", "caz"
+        )
+        for anchor in home_parser.anchors:
+            href = anchor.get("href", "")
+            label = clean_text(anchor.get("text", "")).lower()
+            if "/category/" not in href:
+                continue
+            if not any(word in label for word in category_keywords):
+                continue
+            category_url = urllib.parse.urljoin(PASSO_EVENT_URL, href)
+            if category_url not in category_seen:
+                category_seen.add(category_url)
+                listing_pages.append(("concert_event", category_url))
+            if len(listing_pages) >= 14:
+                break
+        print("[PASSO] Ek konser/festival kategori sayfası:", max(0, len(listing_pages) - 2))
+    except Exception as error:
+        print("[UYARI] PASSO kategori keşfi yapılamadı:", error)
+
+    checked_pages = set()
     for listing_type, listing_url in listing_pages:
+        if listing_url in checked_pages:
+            continue
+        checked_pages.add(listing_url)
         try:
-            html = fetch_html(listing_url)
+            html = home_html if listing_url == PASSO_EVENT_URL and "home_html" in locals() else fetch_html(listing_url)
             page_events = extract_passo_event_links(html, listing_url, listing_type)
-            print(f"[PASSO] {listing_type}: {len(page_events)} etkinlik bağlantısı bulundu.")
+            print(f"[PASSO] {listing_type}: {len(page_events)} etkinlik bağlantısı bulundu | {listing_url}")
             for source_id, item in page_events.items():
                 if listing_type == "football":
                     discovered[source_id] = item
