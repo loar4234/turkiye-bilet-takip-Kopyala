@@ -273,7 +273,7 @@ def scrape_biletnerde():
 
     # Önce JSON-LD Event kayıtlarını oku; kart HTML'i değişse de veri korunur.
     jsonld_blocks = re.findall(
-        r'<script[^>]+type=["\\']application/ld\\+json["\\'][^>]*>(.*?)</script>',
+        r"""<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>""",
         html, re.IGNORECASE | re.DOTALL
     )
     for block in jsonld_blocks:
