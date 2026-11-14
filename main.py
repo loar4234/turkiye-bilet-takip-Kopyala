@@ -492,16 +492,16 @@ def passo_ticket_status(text):
         return "nearly_sold_out"
 
     # Sayısal stok adedini kullanıcıya göstermiyoruz; yalnızca az stok sinyaline çeviriyoruz.
-    if re.search(r"\\bson\\s+\\d{1,3}\\s+bilet\\b", lower):
+    if re.search(r"\bson\s+\d{1,3}\s+bilet\b", lower):
         return "nearly_sold_out"
-    if re.search(r"\\b(only|just)\\s+\\d{1,3}\\s+(tickets?|seats?)\\s+left\\b", lower):
+    if re.search(r"\b(only|just)\s+\d{1,3}\s+(tickets?|seats?)\s+left\b", lower):
         return "nearly_sold_out"
 
     buy_phrases = [
         "buy ticket", "buy tickets", "buy now", "bilet al",
         "hemen al", "tickets available", "select ticket", "ticket selection"
     ]
-    has_price = bool(re.search(r"(?:₺|try)\\s*[\\d.,]+|[\\d.,]+\\s*(?:₺|try)", lower))
+    has_price = bool(re.search(r"(?:₺|try)\s*[\d.,]+|[\d.,]+\s*(?:₺|try)", lower))
     # Genel "sales" kelimesi tek başına satışta kanıtı değildir.
     if any(phrase in lower for phrase in buy_phrases) and has_price:
         return "on_sale"
