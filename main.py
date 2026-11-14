@@ -243,7 +243,10 @@ def classify_music_event(title, text):
         "exhibition", "muze", "museum", "cocuk etkinligi", "kids event",
         "futbol", "football", "basketball", "mac bileti", "karaoke",
         "dans gecesi", "dance night", "dj party", "club night",
-        "talk show", "soylesi", "sohbet", "standup"
+        "talk show", "soylesi", "sohbet", "standup",
+        "party", "nightlife", "night life", "pub", "bar night",
+        "networking", "tanisma etkinligi", "speed dating",
+        "meetup", "dj set", "dj performance"
     )
     if any(word in combined for word in non_music):
         return "other"
@@ -263,6 +266,21 @@ def classify_music_event(title, text):
 def is_target_biletnerde_event(title, text):
     category = classify_music_event(title, text)
     return category in ("concert", "festival")
+
+
+def is_excluded_passo_event(title):
+    key = normalize_key(title)
+    excluded_terms = (
+        "karaoke", "dans gecesi", "dance night", "dj party",
+        "club night", "girls night", "happy girls night",
+        "tanis konus paylas dans et", "90 lar dans", "90s dance",
+        "celtic pub", "depeche mode party", "party", "nightlife",
+        "networking", "tanisma etkinligi", "speed dating",
+        "still standing", "stand up", "standup", "comedy", "komedi",
+        "tiyatro", "theatre", "theater", "talk show", "workshop",
+        "atolye", "sergi", "exhibition", "film", "sinema"
+    )
+    return any(term in key for term in excluded_terms)
 
 
 def scrape_biletnerde():
@@ -527,9 +545,9 @@ def passo_ticket_status(text):
     # Yalnızca sayfada açıkça görülen ifadeler kullanılır; tahmin yapılmaz.
     sold_phrases = [
         "biletler tükendi", "biletler tükenmiştir", "bilet tükendi",
-        "bilet kalmadı", "bilet bulunmamaktadır", "sold out",
-        "all tickets are sold", "no tickets available",
-        "event is sold out", "currently unavailable"
+        "bilet kalmadı", "bilet bulunmamaktadır", "bilet satışa kapandı",
+        "sold out", "all tickets are sold", "no tickets available",
+        "event is sold out", "all tickets sold"
     ]
     not_started_phrases = [
         "satış henüz başlamadı", "satışa henüz açılmadı",
@@ -702,16 +720,7 @@ def scrape_passo():
                 title = clean_text(item.get("title", "")) or f"PASSO etkinliği {source_id}"
 
             title_context = clean_text(title + " " + item.get("title", ""))
-            title_key = normalize_key(title_context)
-            # Bu etkinlik tipleri müzik kategorisi sayfasında listelense bile
-            # kullanıcının istediği konser/festival kapsamına dahil değil.
-            excluded_title_terms = (
-                "karaoke", "dans gecesi", "dance night", "dj party",
-                "club night", "girls night", "happy girls night",
-                "tanis konus paylas dans et", "90 lar dans",
-                "90s dance", "celtic pub"
-            )
-            if any(term in title_key for term in excluded_title_terms):
+            if is_excluded_passo_event(title_context):
                 print("[PASSO] Konser/festival dışı elendi:", title_context[:120])
                 continue
 
@@ -719,7 +728,7 @@ def scrape_passo():
             if category is None:
                 # Kategori kararını yalnızca etkinliğin kendi başlığından ver.
                 title_category = classify_music_event(title_context, "")
-                if title_category == "other":
+                if title_category in ("other", "football"):
                     print("[PASSO] Konser/festival dışı elendi:", title_context[:120])
                     continue
                 if title_category in ("concert", "festival"):
@@ -979,8 +988,8 @@ def merge_existing_data(events):
             for field in ("event_date", "price_min", "price_max", "city", "venue"):
                 if event.get(field) in (None, "") and old.get(field) not in (None, ""):
                     event[field] = old[field]
-            if event.get("ticket_status") in (None, "", "unknown") and old.get("ticket_status") not in (None, "", "unknown"):
-                event["ticket_status"] = old["ticket_status"]
+            # Bilet durumu kaynaktan bu taramada doğrulanamadıysa eski durumu
+            # koruma: eski "Tükendi" veya "Satışta" bilgisi güncelmiş gibi gösterilmesin.
     return events
 
 
@@ -988,8 +997,8 @@ def save_and_notify(events):
     if not events:
         return
 
-    # Kaynakta bilgi geçici olarak eksikse, DB'deki doğrulanmış veriyi
-    # unknown/None ile ezme. Bu özellikle stok durumu bildirimlerini korur.
+    # Tarih/fiyat/konum gibi geçici eksik alanları birleştir; bilet durumunu
+    # ise yalnızca bu taramada kaynaktan doğrulanan değerle güncelle.
     events = merge_existing_data(events)
     changes = find_event_changes(events)
     save_events(events)
