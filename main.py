@@ -9,17 +9,17 @@ from html.parser import HTMLParser
 
 SOURCES = [
     {
-        "name": "KonserBul",
-        "url": "https://konserbul.com.tr/"
+        "name": "BiletNerde",
+        "url": "https://biletnerde.com/etkinlikler"
     },
     {
         "name": "TFF",
-        "url": "https://www.tff.org/default.aspx?lang=tr"
+        "url": "https://www.tff.org/default.aspx"
     }
 ]
 
 
-class TitleParser(HTMLParser):
+class PageParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.in_title = False
@@ -42,19 +42,27 @@ def check_source(source):
     request = urllib.request.Request(
         source["url"],
         headers={
-            "User-Agent": "Mozilla/5.0 (compatible; TurkiyeBiletTakip/1.0)"
+            "User-Agent": "Mozilla/5.0 (compatible; TurkiyeBiletTakip/1.0)",
+            "Accept": "text/html,application/xhtml+xml"
         }
     )
 
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            html = response.read().decode("utf-8", errors="replace")
-            parser = TitleParser()
+            raw_html = response.read()
+
+            charset = response.headers.get_content_charset() or "utf-8"
+            html = raw_html.decode(charset, errors="replace")
+
+            parser = PageParser()
             parser.feed(html)
 
-            print(f"[BASARILI] {source['name']}")
+            title = parser.title.strip()
+
+            print("\n[BASARILI]", source["name"])
             print("HTTP:", response.status)
-            print("Sayfa:", parser.title.strip()[:150])
+            print("Sayfa başlığı:", title[:200])
+            print("HTML boyutu:", len(raw_html), "byte")
 
             return {
                 "source": source["name"],
@@ -65,7 +73,9 @@ def check_source(source):
 
     except Exception as error:
         message = str(error)[:500]
-        print(f"[HATA] {source['name']}: {message}")
+
+        print("\n[HATA]", source["name"])
+        print(message)
 
         return {
             "source": source["name"],
@@ -76,10 +86,16 @@ def check_source(source):
 
 
 def save_results(results):
-    url = os.environ["SUPABASE_URL"].rstrip("/")
-    key = os.environ["SUPABASE_KEY"]
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_KEY")
 
-    endpoint = f"{url}/rest/v1/source_checks"
+    if not supabase_url or not supabase_key:
+        raise RuntimeError(
+            "SUPABASE_URL veya SUPABASE_KEY eksik. "
+            "GitHub Secrets ayarlarını kontrol et."
+        )
+
+    endpoint = supabase_url.rstrip("/") + "/rest/v1/source_checks"
 
     for result in results:
         data = json.dumps(result).encode("utf-8")
@@ -88,8 +104,8 @@ def save_results(results):
             endpoint,
             data=data,
             headers={
-                "apikey": key,
-                "Authorization": f"Bearer {key}",
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
                 "Content-Type": "application/json",
                 "Prefer": "return=minimal"
             },
@@ -97,17 +113,39 @@ def save_results(results):
         )
 
         with urllib.request.urlopen(request, timeout=30) as response:
-            print("Supabase kayıt:", result["source"], response.status)
+            print(
+                "[SUPABASE KAYDI]",
+                result["source"],
+                "HTTP:",
+                response.status
+            )
 
 
 def main():
-    print("TURKIYE BILET TAKIP - KAYNAK TESTI")
-    print(datetime.now(timezone.utc).isoformat())
+    print("=" * 50)
+    print("TÜRKİYE BİLET TAKİP SİSTEMİ")
+    print("KAYNAK ERİŞİM TESTİ")
+    print("=" * 50)
 
-    results = [check_source(source) for source in SOURCES]
+    print("Kontrol zamanı:", datetime.now(timezone.utc).isoformat())
+
+    results = []
+
+    for source in SOURCES:
+        results.append(check_source(source))
+
     save_results(results)
 
-    print("Kaynak kontrolü tamamlandı.")
+    successful = sum(
+        1 for result in results
+        if result["status"] == "success"
+    )
+
+    print("\n" + "=" * 50)
+    print("KONTROL TAMAMLANDI")
+    print("Başarılı kaynak:", successful)
+    print("Toplam kaynak:", len(SOURCES))
+    print("=" * 50)
 
 
 if __name__ == "__main__":
