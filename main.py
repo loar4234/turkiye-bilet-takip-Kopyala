@@ -4,7 +4,6 @@ import re
 import json
 import urllib.request
 import urllib.parse
-import urllib.error
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 
@@ -16,7 +15,7 @@ BILETNERDE_URL = "https://biletnerde.com/etkinlikler"
 TFF_URL = "https://www.tff.org/default.aspx?pageID=198"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; TurkiyeBiletTakip/1.0)",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml"
 }
 
@@ -110,39 +109,32 @@ def parse_event_date(text):
         return None
 
     day = int(match.group(1))
-    month_name = match.group(2).lower()
+    month = MONTHS.get(match.group(2).lower())
     year = int(match.group(3))
     hour = int(match.group(4) or 0)
     minute = int(match.group(5) or 0)
-
-    month = MONTHS.get(month_name)
 
     if not month:
         return None
 
     try:
-        value = datetime(
+        return datetime(
             year, month, day, hour, minute,
             tzinfo=timezone.utc
-        )
-        return value.isoformat()
+        ).isoformat()
     except ValueError:
         return None
 
 
 def parse_prices(text):
-    values = re.findall(
-        r"₺\s*([\d.,]+)",
-        text
-    )
-
+    values = re.findall(r"₺\s*([\d.,]+)", text)
     numbers = []
 
     for value in values:
-        normalized = value.replace(".", "").replace(",", ".")
-
         try:
-            numbers.append(float(normalized))
+            numbers.append(
+                float(value.replace(".", "").replace(",", "."))
+            )
         except ValueError:
             pass
 
@@ -153,28 +145,25 @@ def parse_prices(text):
 
 
 def find_city(text):
-    lower = text.lower()
-
     for city in CITIES:
-        if city.lower() in lower:
+        if city.lower() in text.lower():
             return city
-
     return None
 
 
 def classify_event(text):
     lower = text.lower()
 
-    if any(word in lower for word in ["festival", "festivali"]):
+    if "festival" in lower or "festivali" in lower:
         return "festival"
 
-    if any(word in lower for word in [
+    if any(x in lower for x in [
         "maç", "mac", "futbol", "spor", "basketbol"
     ]):
         return "football"
 
-    if any(word in lower for word in [
-        "konser", "symphony", "müzik", "muzik"
+    if any(x in lower for x in [
+        "konser", "müzik", "muzik", "symphony"
     ]):
         return "concert"
 
@@ -199,10 +188,11 @@ def scrape_biletnerde():
         if "/etkinlik/" not in href:
             continue
 
-        if not text or len(text) < 8:
+        if len(text) < 8:
             continue
 
         full_url = urllib.parse.urljoin(BILETNERDE_URL, href)
+
         query = urllib.parse.parse_qs(
             urllib.parse.urlparse(full_url).query
         )
@@ -219,12 +209,9 @@ def scrape_biletnerde():
 
         event_date = parse_event_date(text)
         price_min, price_max = parse_prices(text)
-        city = find_city(text)
-        category = classify_event(text)
 
         title = text
 
-        # Karttaki tarih ve fiyat bilgilerini başlıktan ayır.
         title = re.sub(
             r"\d{1,2}\s*(?:-\s*\d{1,2}\s*)?"
             r"(?:Ocak|Şubat|Subat|Mart|Nisan|Mayıs|Mayis|"
@@ -246,8 +233,8 @@ def scrape_biletnerde():
             "source": "BiletNerde",
             "source_event_id": str(source_id),
             "title": title[:500],
-            "category": category,
-            "city": city,
+            "category": classify_event(text),
+            "city": find_city(text),
             "venue": None,
             "event_date": event_date,
             "ticket_url": full_url,
@@ -261,7 +248,14 @@ def scrape_biletnerde():
     print("BiletNerde bulunan etkinlik:", len(events))
 
     for event in events[:5]:
-        print("ETKİNLİK:", event["title"], "|", event["city"])
+        print(
+            "ETKİNLİK:",
+            event["title"],
+            "|",
+            event["city"],
+            "|",
+            event["event_date"]
+        )
 
     return events
 
@@ -276,14 +270,17 @@ def scrape_tff():
 
     full_text = clean_text(" ".join(parser.parts))
 
+    # TFF satırları:
+    # Tarih Saat Ev Sahibi 0 - 2 Deplasman Detaylar
+    # Tarih Saat Ev Sahibi - Deplasman Detaylar
+
     pattern = re.compile(
         r"(\d{2}\.\d{2}\.\d{4})\s+"
         r"(\d{1,2}:\d{2})\s+"
-        r"([A-ZÇĞİÖŞÜ0-9 .()&/-]+?)\s+"
-        r"-\s+"
-        r"([A-ZÇĞİÖŞÜ0-9 .()&/-]+?)"
-        r"(?=\s+\d{2}\.\d{2}\.\d{4}|"
-        r"\s+Trendyol Süper Lig|\s+Puan Cetveli|$)"
+        r"(.+?)\s+"
+        r"(?:\d+\s*-\s*\d+|-)\s+"
+        r"(.+?)"
+        r"(?=\s+Detaylar|\s+\d{2}\.\d{2}\.\d{4}|$)"
     )
 
     matches = pattern.findall(full_text)
@@ -295,9 +292,12 @@ def scrape_tff():
         home = clean_text(home)
         away = clean_text(away)
 
-        # Menü veya başlık gibi yanlış eşleşmeleri ele.
         if len(home) < 3 or len(away) < 3:
             continue
+
+        # Takım isimlerini gereksiz metinlerden arındır.
+        home = re.sub(r"^.*?(?=[A-ZÇĞİÖŞÜ])", "", home)
+        away = re.sub(r"\s+Puan Cetveli.*$", "", away)
 
         try:
             date_value = datetime.strptime(
@@ -308,6 +308,7 @@ def scrape_tff():
             continue
 
         title = f"{home} - {away}"
+
         source_id = (
             date_value.strftime("%Y%m%d%H%M")
             + "-"
@@ -346,11 +347,8 @@ def scrape_tff():
 
 
 def save_events(events):
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Supabase GitHub Secrets eksik!")
-
     if not events:
-        print("Kaydedilecek etkinlik bulunamadı.")
+        print("Kaydedilecek etkinlik yok.")
         return
 
     endpoint = (
@@ -359,7 +357,6 @@ def save_events(events):
         + "?on_conflict=source,source_event_id"
     )
 
-    # Supabase API için 100 kayıtlık paketler.
     for start in range(0, len(events), 100):
         batch = events[start:start + 100]
 
@@ -425,15 +422,15 @@ def run_source(name, function):
         events = function()
 
         if not events:
-            print(
-                "[UYARI]",
-                name,
-                "sayfasına erişildi ancak etkinlik ayrıştırılamadı."
-            )
+            print("[UYARI]", name, "için maç/etkinlik bulunamadı.")
+
             save_source_check(
-                name, "error", 0,
-                "Sayfa erişilebilir fakat etkinlik ayrıştırılamadı."
+                name,
+                "error",
+                0,
+                "Sayfaya erişildi ancak veri ayrıştırılamadı."
             )
+
             return []
 
         save_events(events)
@@ -458,6 +455,9 @@ def main():
     print("Zaman:", datetime.now(timezone.utc).isoformat())
     print("=" * 55)
 
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Supabase GitHub Secrets eksik!")
+
     biletnerde_events = run_source(
         "BiletNerde",
         scrape_biletnerde
@@ -474,7 +474,7 @@ def main():
     print("TARAMA TAMAMLANDI")
     print("BiletNerde:", len(biletnerde_events))
     print("TFF:", len(tff_events))
-    print("Toplam:", total)
+    print("TOPLAM:", total)
     print("=" * 55)
 
 
