@@ -783,7 +783,26 @@ def run_passo():
         events = scrape_passo()
         if not events:
             raise RuntimeError("PASSO sayfalarından etkinlik/maç ayrıştırılamadı.")
-        save_and_notify(events)
+
+        # İlk taramada mevcut PASSO kayıtlarını sessizce başlangıç verisi olarak kaydet;
+        # böylece ilk çalıştırmada onlarca eski etkinlik için bildirim yağmuru oluşmaz.
+        check_url = (
+            SUPABASE_URL + "/rest/v1/events?"
+            + urllib.parse.urlencode({
+                "select": "source_event_id",
+                "source": "eq.PASSO",
+                "limit": "1"
+            })
+        )
+        _, existing_result = supabase_request(check_url, method="GET")
+        existing_pass = json.loads(existing_result or "[]")
+
+        if existing_pass:
+            save_and_notify(events)
+        else:
+            print("[PASSO] İlk tarama: mevcut etkinlikler başlangıç verisi olarak kaydediliyor; bildirim gönderilmeyecek.")
+            save_events(events)
+
         save_source_check("PASSO", "success", len(events))
         return events
     except Exception as error:
