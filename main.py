@@ -266,7 +266,7 @@ def is_target_biletnerde_event(title, text):
 
 
 def scrape_biletnerde():
-    print("\\n--- BİLETNERDE TARAMASI (KONSER/FESTİVAL) ---")
+    print("\n--- BİLETNERDE TARAMASI (KONSER/FESTİVAL) ---")
     html = fetch_html(BILETNERDE_URL)
     events = []
     seen = set()
@@ -293,11 +293,13 @@ def scrape_biletnerde():
                 stack.extend(obj["@graph"])
             typ = obj.get("@type", [])
             types = [typ] if isinstance(typ, str) else typ
-            if not any(str(x).lower() == "event" for x in types):
+            if not any(str(x).lower() in ("event", "musicevent") for x in types):
                 continue
             title = clean_text(str(obj.get("name") or ""))
             description = clean_text(str(obj.get("description") or ""))
             category = classify_music_event(title, title + " " + description)
+            if category == "unknown" and any(str(x).lower() == "musicevent" for x in types):
+                category = "concert"
             if not title or category not in ("concert", "festival"):
                 continue
             raw_url = str(obj.get("url") or BILETNERDE_URL)
@@ -371,7 +373,7 @@ def scrape_biletnerde():
 
     events = dedupe_events(events, "BiletNerde")
     print("BiletNerde konser/festival bulunan:", len(events))
-    if not events and re.search(r"0\\s*etkinlik|etkinlik bulunamadı|bu kriterlere uygun etkinlik bulunamadı", html, re.IGNORECASE):
+    if not events and re.search(r"0\s*etkinlik|etkinlik bulunamadı|bu kriterlere uygun etkinlik bulunamadı", html, re.IGNORECASE):
         print("[BİLGİ] BiletNerde sayfası şu anda 0 etkinlik gösteriyor.")
     for event in events[:8]:
         print("ETKİNLİK:", event["title"], "|", event["category"], "|", event["city"], "|", event["event_date"])
