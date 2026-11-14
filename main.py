@@ -287,6 +287,205 @@ def is_excluded_passo_event(title, url=""):
     return any(term in key for term in excluded_terms)
 
 
+
+def platform_event_from_json(obj, source, base_url):
+    typ = obj.get("@type", [])
+    types = [typ] if isinstance(typ, str) else typ
+    if not any(str(x).lower() in ("event", "musicevent") for x in types):
+        return None
+    title = clean_text(str(obj.get("name") or ""))
+    description = clean_text(str(obj.get("description") or ""))
+    category = classify_music_event(title, title + " " + description)
+    if category == "unknown" and any(str(x).lower() == "musicevent" for x in types):
+        category = "concert"
+    if category == "unknown" and any(x in (title + " " + description).lower()
+                                      for x in ("festival", "konser", "concert")):
+        category = "festival" if "festival" in (title + description).lower() else "concert"
+    if not title or category not in ("concert", "festival"):
+        return None
+    raw_url = str(obj.get("url") or base_url)
+    full_url = urllib.parse.urljoin(base_url, raw_url)
+    location = obj.get("location") or {}
+    address = location.get("address") or {} if isinstance(location, dict) else {}
+    city = address.get("addressLocality") if isinstance(address, dict) else None
+    venue = location.get("name") if isinstance(location, dict) else None
+    date_value = None
+    if obj.get("startDate"):
+        try:
+            dt = datetime.fromisoformat(str(obj["startDate"]).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=TR_TZ)
+            date_value = dt.isoformat()
+        except ValueError:
+            date_value = parse_event_date(str(obj["startDate"]))
+    offers = obj.get("offers") or {}
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    pmin, pmax = parse_prices(description)
+    if isinstance(offers, dict):
+        try:
+            if offers.get("price") is not None:
+                pmin = pmax = float(str(offers["price"]).replace(",", "."))
+        except (TypeError, ValueError):
+            pass
+    sid = urllib.parse.urlparse(full_url).path.rstrip("/") or title
+    return {
+        "source": source, "source_event_id": str(sid)[:250],
+        "title": title[:500], "category": category,
+        "city": city or find_city(description), "venue": venue,
+        "event_date": date_value, "ticket_url": full_url,
+        "ticket_status": passo_ticket_status(json.dumps(obj, ensure_ascii=False) + " " + description),
+        "price_min": pmin, "price_max": pmax,
+        "last_seen_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+
+def scrape_ticket_platform(source, urls):
+    print(f"\n--- {source.upper()} TARAMASI (KONSER/FESTİVAL) ---")
+    events = {}
+    successful_pages = 0
+    errors = []
+    for page_url in urls:
+        try:
+            html = fetch_html(page_url)
+            successful_pages += 1
+        except Exception as error:
+            errors.append(f"{page_url}: {error}")
+            print(f"[UYARI] {source} sayfası okunamadı:", error)
+            continue
+
+        blocks = re.findall(
+            r"""<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>""",
+            html, re.IGNORECASE | re.DOTALL
+        )
+        for block in blocks:
+            try:
+                payload = json.loads(block.strip())
+            except (ValueError, TypeError):
+                continue
+            stack = payload if isinstance(payload, list) else [payload]
+            while stack:
+                obj = stack.pop()
+                if isinstance(obj, list):
+                    stack.extend(obj)
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                if isinstance(obj.get("@graph"), list):
+                    stack.extend(obj["@graph"])
+                event = platform_event_from_json(obj, source, page_url)
+                if event:
+                    events[event["source_event_id"]] = event
+
+        # Kart bağlantıları: yalnızca ilgili platformun konser/festival liste sayfalarındaki
+        # gerçek etkinlik detay URL'leri kabul edilir. Stok bilgisi tahmin edilmez.
+        parser = AnchorParser()
+        parser.feed(html)
+        for anchor in parser.anchors:
+            href = unescape(anchor.get("href", "")).strip()
+            label = clean_text(anchor.get("text", ""))
+            if not href or len(label) < 4:
+                continue
+            full_url = urllib.parse.urljoin(page_url, href)
+            parsed = urllib.parse.urlparse(full_url)
+            host = (parsed.hostname or "").lower()
+            if not (host.endswith("biletix.com") or host.endswith("bubilet.com.tr")
+                    or host.endswith("biletinial.com") or host.endswith("mobilet.com")):
+                continue
+            path = parsed.path.lower().rstrip("/")
+            if not path or path in ("/", "/tr", "/tr-tr", "/anasayfa/turkiye/tr", "/tr/muzik"):
+                continue
+            if any(x in path for x in ("/mekan/", "/yardim", "/help/", "/kategori/", "/etiket/")):
+                continue
+            if not any(x in path for x in ("/etkinlik", "/event", "/bilet", "/konser", "/festival")):
+                continue
+            if is_excluded_passo_event(label, full_url):
+                continue
+            category = classify_music_event(label, label)
+            if category not in ("concert", "festival"):
+                # Biletinial/Mobilet/Bubilet music and concert list pages provide category context.
+                page_context = page_url.lower()
+                if any(x in page_context for x in ("/muzik", "/konser", "/festival", "/etiket/konser")):
+                    category = "festival" if "festival" in (label + path).lower() else "concert"
+                else:
+                    continue
+            sid = path
+            if sid in events:
+                continue
+            pmin, pmax = parse_prices(label)
+            date_value = parse_event_date(label)
+            events[sid] = {
+                "source": source, "source_event_id": sid[:250],
+                "title": label[:500], "category": category,
+                "city": find_city(label), "venue": None,
+                "event_date": date_value, "ticket_url": full_url,
+                "ticket_status": passo_ticket_status(label),
+                "price_min": pmin, "price_max": pmax,
+                "last_seen_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+
+    result = dedupe_events(list(events.values()), source)
+    print(f"[{source}] Başarılı liste sayfası: {successful_pages}/{len(urls)} | Etkinlik: {len(result)}")
+    if errors and successful_pages == 0:
+        raise RuntimeError("; ".join(errors)[:500])
+    return result
+
+
+def run_ticket_source(source, urls):
+    try:
+        events = scrape_ticket_platform(source, urls)
+        if not events:
+            save_source_check(source, "success", 0)
+            return []
+        check_url = (
+            SUPABASE_URL + "/rest/v1/events?"
+            + urllib.parse.urlencode({
+                "select": "source_event_id", "source": f"eq.{source}", "limit": "1"
+            })
+        )
+        _, existing_result = supabase_request(check_url, method="GET")
+        existing_rows = json.loads(existing_result or "[]")
+        if existing_rows:
+            save_and_notify(events)
+        else:
+            print(f"[{source}] İlk tarama: mevcut etkinlikler başlangıç verisi olarak kaydediliyor; bildirim gönderilmeyecek.")
+            save_events(events)
+        save_source_check(source, "success", len(events))
+        return events
+    except Exception as error:
+        print(f"[HATA] {source}:", error)
+        save_source_check(source, "error", 0, error)
+        return []
+
+
+def run_biletix():
+    return run_ticket_source("Biletix", [
+        "https://www.biletix.com/anasayfa/TURKIYE/tr"
+    ])
+
+
+def run_bubilet():
+    cities = ("istanbul", "ankara", "izmir", "antalya", "bursa",
+              "adana", "konya", "eskisehir", "trabzon", "samsun",
+              "kayseri", "gaziantep")
+    urls = [f"https://www.bubilet.com.tr/{city}/etiket/konser" for city in cities]
+    return run_ticket_source("Bubilet", urls)
+
+
+def run_biletinial():
+    return run_ticket_source("Biletinial", [
+        "https://biletinial.com/tr-tr/muzik"
+    ])
+
+
+def run_mobilet():
+    return run_ticket_source("Mobilet", [
+        "https://mobilet.com/tr/"
+    ])
+
+
 def scrape_biletnerde():
     print("\n--- BİLETNERDE TARAMASI (KONSER/FESTİVAL) ---")
     html = fetch_html(BILETNERDE_URL)
@@ -634,6 +833,20 @@ def run_self_tests():
     party_url = "https://ssrprod.passo.com.tr/en/event/depeche-mode-party-the-wall-kadikoy/12721321"
     if not is_excluded_passo_event("Depeche Mode", party_url):
         raise RuntimeError("Etkinlik filtre testi başarısız: Depeche Mode party URL")
+
+
+    # Yeni platform kaynakları için JSON-LD ayrıştırma regresyon testi.
+    sample = {
+        "@type": "MusicEvent", "name": "Örnek Konser",
+        "startDate": "2026-12-01T20:00:00+03:00",
+        "url": "https://example.invalid/event/123",
+        "offers": {"price": "750", "availability": "https://schema.org/InStock"}
+    }
+    parsed = platform_event_from_json(sample, "Biletix", "https://www.biletix.com/")
+    if not parsed or parsed["title"] != "Örnek Konser" or parsed["ticket_status"] != "on_sale":
+        raise RuntimeError("Yeni platform JSON-LD ayrıştırma testi başarısız.")
+    if platform_event_from_json({"@type": "Event", "name": "Stand Up Gecesi"}, "Bubilet", "https://www.bubilet.com.tr/") is not None:
+        raise RuntimeError("Yeni platform konser filtresi testi başarısız.")
 
     print("[TEST] Etkinlik filtresi ve bilet durumu testleri başarılı.")
 
@@ -1220,15 +1433,23 @@ def main():
         raise RuntimeError("Supabase GitHub Secrets eksik!")
 
     run_self_tests()
-    biletnerde_events = run_biletnerde()
+    # BiletNerde devre dışı: yerine dört doğrudan bilet platformu taranır.
+    biletix_events = run_biletix()
+    bubilet_events = run_bubilet()
+    biletinial_events = run_biletinial()
+    mobilet_events = run_mobilet()
     passo_events = run_passo()
     tff_events = run_tff()
 
-    total = len(biletnerde_events) + len(passo_events) + len(tff_events)
+    total = (len(biletix_events) + len(bubilet_events) + len(biletinial_events)
+             + len(mobilet_events) + len(passo_events) + len(tff_events))
 
     print("\n" + "=" * 55)
     print("TARAMA TAMAMLANDI")
-    print("BiletNerde (konser/festival):", len(biletnerde_events))
+    print("Biletix:", len(biletix_events))
+    print("Bubilet:", len(bubilet_events))
+    print("Biletinial:", len(biletinial_events))
+    print("Mobilet:", len(mobilet_events))
     print("PASSO:", len(passo_events))
     print("TFF:", len(tff_events))
     print("TOPLAM:", total)
