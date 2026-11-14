@@ -402,7 +402,7 @@ def passo_ticket_status(text):
         return "not_on_sale"
 
     # PASSO detay sayfasında satış kategorileri ve ₺ fiyatları varsa satış açık.
-    if re.search(r"(?:sales|satış)\s*(?:\n|:)", lower) and re.search(r"₺\s*[\d.,]+", text):
+    if re.search(r"\b(?:sales|satış)\b", lower) and re.search(r"₺\s*[\d.,]+", text):
         return "on_sale"
     return "unknown"
 
