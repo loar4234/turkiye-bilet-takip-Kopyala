@@ -177,68 +177,51 @@ def classify_event(text):
     return "event"
 
 
+def is_target_biletnerde_event(title, text):
+    category = classify_event(title + " " + text)
+    return category in ("concert", "festival")
+
+
 def scrape_biletnerde():
-    print("\n--- BİLETNERDE TARAMASI ---")
-
+    print("\n--- BİLETNERDE TARAMASI (KONSER/FESTİVAL) ---")
     html = fetch_html(BILETNERDE_URL)
-
     parser = AnchorParser()
     parser.feed(html)
-
     events = []
     seen = set()
 
     for anchor in parser.anchors:
         href = anchor["href"]
         text = clean_text(anchor["text"])
-
-        if "/etkinlik/" not in href:
+        if "/etkinlik/" not in href or len(text) < 8:
             continue
-
-        if len(text) < 8:
-            continue
-
         full_url = urllib.parse.urljoin(BILETNERDE_URL, href)
-
-        query = urllib.parse.parse_qs(
-            urllib.parse.urlparse(full_url).query
-        )
-
-        source_id = (
-            query.get("eid", [None])[0]
-            or urllib.parse.urlparse(full_url).path
-        )
-
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(full_url).query)
+        source_id = query.get("eid", [None])[0] or urllib.parse.urlparse(full_url).path
         if source_id in seen:
             continue
 
-        seen.add(source_id)
-
-        event_date = parse_event_date(text)
-        price_min, price_max = parse_prices(text)
-
         title = re.sub(
-            r"\d{1,2}\s*(?:-\s*\d{1,2}\s*)?"
-            r"(?:Ocak|Şubat|Subat|Mart|Nisan|Mayıs|Mayis|"
-            r"Haziran|Temmuz|Ağustos|Agustos|Eylül|Eylul|"
-            r"Ekim|Kasım|Kasim|Aralık|Aralik)"
-            r"\s+\d{4}.*$",
-            "",
-            text,
-            flags=re.IGNORECASE
+            r"\d{1,2}\s*(?:-\s*\d{1,2}\s*)?(?:Ocak|Şubat|Subat|Mart|Nisan|Mayıs|Mayis|Haziran|Temmuz|Ağustos|Agustos|Eylül|Eylul|Ekim|Kasım|Kasim|Aralık|Aralik)\s+\d{4}.*$",
+            "", text, flags=re.IGNORECASE
         )
-
-        title = re.sub(r"₺\s*[\d.,]+.*$", "", title)
-        title = clean_text(title)
-
+        title = clean_text(re.sub(r"₺\s*[\d.,]+.*$", "", title))
         if not title:
             title = text[:200]
 
+        category = classify_event(text)
+        # Kullanıcının kapsamı konser ve festival; genel/diğer etkinlikleri alma.
+        if category not in ("concert", "festival"):
+            continue
+
+        seen.add(source_id)
+        event_date = parse_event_date(text)
+        price_min, price_max = parse_prices(text)
         events.append({
             "source": "BiletNerde",
             "source_event_id": str(source_id),
             "title": title[:500],
-            "category": classify_event(text),
+            "category": category,
             "city": find_city(text),
             "venue": None,
             "event_date": event_date,
@@ -250,20 +233,10 @@ def scrape_biletnerde():
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
 
-    print("BiletNerde bulunan etkinlik:", len(events))
-
-    for event in events[:5]:
-        print(
-            "ETKİNLİK:",
-            event["title"],
-            "|",
-            event["city"],
-            "|",
-            event["event_date"]
-        )
-
+    print("BiletNerde konser/festival bulunan:", len(events))
+    for event in events[:8]:
+        print("ETKİNLİK:", event["title"], "|", event["category"], "|", event["city"], "|", event["event_date"])
     return events
-
 
 def scrape_tff():
     print("\n--- TFF SÜPER LİG TARAMASI ---")
@@ -388,29 +361,28 @@ def parse_passo_date(text):
 
 
 def passo_ticket_status(text):
-    lower = text.lower()
+    lower = unescape(text).lower()
     sold_phrases = [
-        "biletler tükendi", "tükendi", "sold out",
-        "all tickets are sold", "no tickets available"
+        "biletler tükendi", "tükendi", "sold out", "all tickets are sold",
+        "no tickets available", "event is sold out", "currently unavailable"
     ]
     not_started_phrases = [
         "satış henüz başlamadı", "satışa henüz açılmadı",
-        "not yet on sale", "sales have not started"
+        "not yet on sale", "sales have not started", "coming soon"
     ]
     if any(phrase in lower for phrase in sold_phrases):
         return "sold_out"
     if any(phrase in lower for phrase in not_started_phrases):
         return "not_on_sale"
 
-    # Sadece açık satın alma çağrısı ve fiyat birlikte görünüyorsa satışta say.
     buy_phrases = [
-        "buy ticket", "buy tickets", "buy now",
-        "bilet al", "hemen al", "tickets available"
+        "buy ticket", "buy tickets", "buy now", "bilet al",
+        "hemen al", "tickets available", "select ticket", "ticket selection"
     ]
-    if any(phrase in lower for phrase in buy_phrases) and re.search(r"(?:₺|try)\s*[\d.,]+|[\d.,]+\s*(?:₺|try)", lower):
+    has_price = bool(re.search(r"(?:₺|try)\\s*[\\d.,]+|[\\d.,]+\\s*(?:₺|try)", lower))
+    if any(phrase in lower for phrase in buy_phrases) and has_price:
         return "on_sale"
     return "unknown"
-
 
 def passo_metadata_title(html):
     patterns = [
@@ -428,6 +400,39 @@ def passo_metadata_title(html):
     return None
 
 
+def extract_passo_event_links(html, listing_url, listing_type):
+    parser = AnchorParser()
+    parser.feed(html)
+    found = {}
+    for anchor in parser.anchors:
+        href = anchor.get("href", "")
+        if "/event/" not in href:
+            continue
+        full_url = urllib.parse.urljoin(listing_url, href)
+        path = urllib.parse.urlparse(full_url).path.rstrip("/")
+        source_id = path.split("/")[-1]
+        if not source_id.isdigit():
+            continue
+        title = clean_text(anchor.get("text", ""))
+        if len(title) < 3:
+            continue
+        category = "football" if listing_type == "football" else None
+        found[source_id] = {"url": full_url, "title": title, "category": category}
+
+    # SSR/Next.js sayfalarında bazı etkinlikler bağlantı yerine gömülü JSON içinde bulunabiliyor.
+    # Yalnızca gerçek /event/<slug>/<numeric-id> desenlerini al; rastgele sayıları etkinlik sanma.
+    for match in re.finditer(r'["\\']([^"\\']*/event/[^"\\']*/(\\d{5,})[^"\\']*)["\\']', html, re.IGNORECASE):
+        raw_url, source_id = match.group(1), match.group(2)
+        full_url = urllib.parse.urljoin(listing_url, unescape(raw_url).replace("\\/", "/"))
+        if source_id not in found:
+            found[source_id] = {
+                "url": full_url,
+                "title": "",
+                "category": "football" if listing_type == "football" else None
+            }
+    return found
+
+
 def scrape_passo():
     print("\n--- PASSO TARAMASI (KONSER/FESTİVAL + SÜPER LİG) ---")
     discovered = {}
@@ -436,36 +441,16 @@ def scrape_passo():
         ("concert_event", PASSO_EVENT_URL),
         ("football", PASSO_SUPERLIG_URL)
     ]
-
     for listing_type, listing_url in listing_pages:
         try:
             html = fetch_html(listing_url)
-            parser = AnchorParser()
-            parser.feed(html)
-
-            for anchor in parser.anchors:
-                href = anchor.get("href", "")
-                if "/event/" not in href:
-                    continue
-                full_url = urllib.parse.urljoin(listing_url, href)
-                path = urllib.parse.urlparse(full_url).path.rstrip("/")
-                source_id = path.split("/")[-1]
-                if not source_id.isdigit():
-                    continue
-
-                title = clean_text(anchor.get("text", ""))
-                if len(title) < 3:
-                    continue
-
+            page_events = extract_passo_event_links(html, listing_url, listing_type)
+            print(f"[PASSO] {listing_type}: {len(page_events)} etkinlik bağlantısı bulundu.")
+            for source_id, item in page_events.items():
                 if listing_type == "football":
-                    # Yalnızca PASSO'nun Süper Lig kategori sayfasından gelen maçlar.
-                    discovered[source_id] = {
-                        "url": full_url, "title": title, "category": "football"
-                    }
+                    discovered[source_id] = item
                 else:
-                    discovered.setdefault(source_id, {
-                        "url": full_url, "title": title, "category": None
-                    })
+                    discovered.setdefault(source_id, item)
         except Exception as error:
             print(f"[UYARI] PASSO liste sayfası okunamadı ({listing_type}):", error)
 
@@ -476,25 +461,28 @@ def scrape_passo():
             parser = TextParser()
             parser.feed(detail_html)
             detail_text = clean_text(" ".join(parser.parts))
-            title = passo_metadata_title(detail_html) or item["title"]
+            title = passo_metadata_title(detail_html) or item.get("title") or ""
 
-            # Bazı PASSO sayfalarında metin içinde etkinlik başlığı ayrıca bulunuyor.
-            heading_match = re.search(r"TICKET DETAILS\s+(.+?)\s+(?:\d{1,2}\s+\w+|Sales|Ticket Information)", detail_text, re.IGNORECASE)
+            heading_match = re.search(
+                r"TICKET DETAILS\\s+(.+?)\\s+(?:\\d{1,2}\\s+\\w+|Sales|Ticket Information)",
+                detail_text, re.IGNORECASE
+            )
             if heading_match and (not title or "share:" in title.lower()):
-                candidate = clean_text(heading_match.group(1))
-                if len(candidate) >= 3:
-                    title = candidate
+                title = clean_text(heading_match.group(1))
+
+            if not title or "share:" in title.lower():
+                title = clean_text(item.get("title", "")) or f"PASSO etkinliği {source_id}"
 
             category = item["category"]
             if category is None:
-                category = classify_event(title + " " + detail_text[:1200])
-                if category == "football":
-                    # Ana etkinlik listesinden futbol maçı sınıfına düşenleri dahil etme.
-                    category = "event"
+                category = classify_event(title + " " + detail_text[:2500])
+                if category not in ("concert", "festival"):
+                    # PASSO genel liste sayfasındaki spor/diğer etkinlikleri kapsam dışında tut.
+                    continue
 
             price_min, price_max = parse_prices(detail_text)
+            status = passo_ticket_status(detail_html + " " + detail_text)
             event_date = parse_passo_date(detail_text)
-            status = passo_ticket_status(detail_text)
 
             events.append({
                 "source": "PASSO",
@@ -514,14 +502,13 @@ def scrape_passo():
         except Exception as error:
             print(f"[UYARI] PASSO etkinlik detayı okunamadı ({source_id}):", error)
 
-    print("PASSO bulunan etkinlik/maç:", len(events))
-    for event in events[:10]:
-        print(
-            "PASSO:", event["title"], "|", event["category"],
-            "|", event["ticket_status"], "|", event["event_date"]
-        )
+    counts = {}
+    for event in events:
+        counts[event["ticket_status"]] = counts.get(event["ticket_status"], 0) + 1
+    print("PASSO bulunan etkinlik/maç:", len(events), "| Durum dağılımı:", counts)
+    for event in events[:20]:
+        print("PASSO:", event["title"], "|", event["category"], "|", event["ticket_status"], "|", event["event_date"])
     return events
-
 
 def supabase_request(endpoint, method="GET", data=None, prefer=None):
     headers = {
@@ -854,7 +841,7 @@ def run_tff():
 
 def main():
     print("=" * 55)
-    print("TÜRKİYE BİLET TAKİP - SÜPER LİG")
+    print("TÜRKİYE BİLET TAKİP - KONSER/FESTİVAL + SÜPER LİG")
     print("Zaman:", datetime.now(timezone.utc).isoformat())
     print("=" * 55)
 
@@ -869,7 +856,7 @@ def main():
 
     print("\n" + "=" * 55)
     print("TARAMA TAMAMLANDI")
-    print("BiletNerde:", len(biletnerde_events))
+    print("BiletNerde (konser/festival):", len(biletnerde_events))
     print("PASSO:", len(passo_events))
     print("TFF:", len(tff_events))
     print("TOPLAM:", total)
