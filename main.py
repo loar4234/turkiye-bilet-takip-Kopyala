@@ -398,48 +398,6 @@ def save_events(events):
         )
 
 
-def delete_stale_tff_events(valid_ids):
-    print("\nEski TFF kayıtları kontrol ediliyor...")
-
-    query = urllib.parse.urlencode({
-        "select": "source_event_id",
-        "source": "eq.TFF"
-    })
-
-    endpoint = SUPABASE_URL + "/rest/v1/events?" + query
-
-    status, response_text = supabase_request(endpoint)
-
-    existing = json.loads(response_text) if response_text else []
-
-    deleted = 0
-
-    for row in existing:
-        old_id = row.get("source_event_id")
-
-        if old_id and old_id not in valid_ids:
-            delete_query = urllib.parse.urlencode({
-                "source": "eq.TFF",
-                "source_event_id": "eq." + old_id
-            })
-
-            delete_endpoint = (
-                SUPABASE_URL
-                + "/rest/v1/events?"
-                + delete_query
-            )
-
-            supabase_request(
-                delete_endpoint,
-                method="DELETE",
-                prefer="return=minimal"
-            )
-
-            deleted += 1
-
-    print("Eski/hatalı TFF kaydı silindi:", deleted)
-
-
 def save_source_check(source, status, count, error=None):
     endpoint = SUPABASE_URL + "/rest/v1/source_checks"
 
@@ -485,16 +443,8 @@ def run_tff():
         if not events:
             raise RuntimeError("TFF maçları ayrıştırılamadı.")
 
-        # Önce yeni doğru kayıtları kaydet.
+        # Yalnızca bulunan maçları ekle/güncelle; diğer TFF kayıtlarını silme.
         save_events(events)
-
-        # Yeni kayıtlar başarılı olduktan sonra eski hatalı kayıtları temizle.
-        valid_ids = {
-            event["source_event_id"]
-            for event in events
-        }
-
-        delete_stale_tff_events(valid_ids)
 
         save_source_check("TFF", "success", len(events))
 
@@ -508,7 +458,7 @@ def run_tff():
 
 def main():
     print("=" * 55)
-    print("TÜRKİYE BİLET TAKİP - DÜZELTİLMİŞ SÜRÜM")
+    print("TÜRKİYE BİLET TAKİP - SÜPER LİG")
     print("Zaman:", datetime.now(timezone.utc).isoformat())
     print("=" * 55)
 
