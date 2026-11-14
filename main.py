@@ -507,7 +507,7 @@ def notify_event_changes(changes):
         if event.get("ticket_url"):
             lines.append(f"Bilet bağlantısı: {event['ticket_url']}")
 
-        telegram_send("\\n".join(lines))
+        telegram_send("\n".join(lines))
 
 
 def save_and_notify(events):
