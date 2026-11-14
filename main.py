@@ -6,6 +6,7 @@ import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 from html.parser import HTMLParser
+from html import unescape
 
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -420,7 +421,7 @@ def passo_metadata_title(html):
     for pattern in patterns:
         match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
         if match:
-            value = clean_text(html_unescape(match.group(1)))
+            value = clean_text(unescape(match.group(1)))
             value = re.sub(r"\s*[|–-]\s*PASSO.*$", "", value, flags=re.IGNORECASE)
             if len(value) > 3 and "share:" not in value.lower():
                 return value
