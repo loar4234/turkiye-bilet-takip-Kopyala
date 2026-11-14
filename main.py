@@ -23,7 +23,11 @@ TR_TZ = timezone(timedelta(hours=3))
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml"
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Referer": "https://www.google.com/"
 }
 
 MONTHS = {
@@ -391,12 +395,12 @@ def scrape_ticket_platform(source, urls):
             parsed = urllib.parse.urlparse(full_url)
             host = (parsed.hostname or "").lower()
             if not (host.endswith("biletix.com") or host.endswith("bubilet.com.tr")
-                    or host.endswith("biletinial.com") or host.endswith("mobilet.com")):
+                    or host.endswith("biletinial.com") or host.endswith("mobilet.com")\n                    or host.endswith("biletino.com")):
                 continue
             path = parsed.path.lower().rstrip("/")
             if not path or path in ("/", "/tr", "/tr-tr", "/anasayfa/turkiye/tr", "/tr/muzik"):
                 continue
-            if any(x in path for x in ("/mekan/", "/yardim", "/help/", "/kategori/", "/etiket/")):
+            if any(x in path for x in ("/mekan/", "/yardim", "/help/", "/kategori/", "/etiket/", "/city/", "/artist/", "/sanatci/")):
                 continue
             if not any(x in path for x in ("/etkinlik", "/event", "/bilet", "/konser", "/festival")):
                 continue
@@ -406,7 +410,7 @@ def scrape_ticket_platform(source, urls):
             if category not in ("concert", "festival"):
                 # Biletinial/Mobilet/Bubilet music and concert list pages provide category context.
                 page_context = page_url.lower()
-                if any(x in page_context for x in ("/muzik", "/konser", "/festival", "/etiket/konser")):
+                if curated_context:
                     category = "festival" if "festival" in (label + path).lower() else "concert"
                 else:
                     continue
@@ -467,22 +471,30 @@ def run_biletix():
 
 
 def run_bubilet():
+    # Bubilet'in şehir ana sayfaları, /etiket/konser yoluna göre daha geniş etkinlik listesi sunar.
     cities = ("istanbul", "ankara", "izmir", "antalya", "bursa",
               "adana", "konya", "eskisehir", "trabzon", "samsun",
               "kayseri", "gaziantep")
-    urls = [f"https://www.bubilet.com.tr/{city}/etiket/konser" for city in cities]
+    urls = [f"https://www.bubilet.com.tr/{city}" for city in cities]
     return run_ticket_source("Bubilet", urls)
 
 
 def run_biletinial():
+    # Ana sayfa birden fazla şehirdeki müzik etkinliklerini de listeler.
     return run_ticket_source("Biletinial", [
-        "https://biletinial.com/tr-tr/muzik"
+        "https://biletinial.com/tr-tr"
     ])
 
 
 def run_mobilet():
     return run_ticket_source("Mobilet", [
         "https://mobilet.com/tr/"
+    ])
+
+
+def run_biletino():
+    return run_ticket_source("Biletino", [
+        "https://biletino.com/tr/turkiye/"
     ])
 
 
@@ -1442,7 +1454,7 @@ def main():
     tff_events = run_tff()
 
     total = (len(biletix_events) + len(bubilet_events) + len(biletinial_events)
-             + len(mobilet_events) + len(passo_events) + len(tff_events))
+             + len(mobilet_events) + len(biletino_events) + len(passo_events) + len(tff_events))
 
     print("\n" + "=" * 55)
     print("TARAMA TAMAMLANDI")
